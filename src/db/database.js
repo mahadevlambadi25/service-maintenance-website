@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { attachDatabasePool } from '@vercel/functions';
 import pg from 'pg';
 import { ENV, getValidatedNeonPostgresEnv, STORAGE_PATHS } from '../config.js';
 
@@ -155,12 +155,13 @@ function createSqliteQueryInterface(sqliteDb) {
   };
 }
 
-export async function getDb(customPath = null, storagePaths = STORAGE_PATHS) {
-  if (dbInstance && !customPath) return dbInstance;
+export async function getDb(customPath = null, storagePaths = STORAGE_PATHS, { forceMigrate = false } = {}) {
+  if (dbInstance && !customPath && !forceMigrate) return dbInstance;
   ensureStorageDirs(storagePaths);
 
   const useSqlite = Boolean(customPath) || !ENV.DATABASE_URL;
   if (useSqlite) {
+    const { DatabaseSync } = await import('node:sqlite');
     const dbPath = customPath || ENV.DB_PATH;
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     const sqliteDb = new DatabaseSync(dbPath);
@@ -196,32 +197,56 @@ export async function getDb(customPath = null, storagePaths = STORAGE_PATHS) {
   }
 
   // Neon Lakebase Postgres mode:
-  // - Pooled DATABASE_URL for runtime Pool queries
+  // - Pooled DATABASE_URL for runtime Pool queries (attached to Vercel Fluid Compute when active)
   // - Direct DATABASE_URL_UNPOOLED for schema migrations (per neon-postgres skill)
   const neonPg = getValidatedNeonPostgresEnv();
   const pooledUrl = neonPg?.databaseUrl || ENV.DATABASE_URL;
   const directUrl = neonPg?.databaseUrlUnpooled || ENV.DATABASE_URL_UNPOOLED || pooledUrl;
 
-  const migrationPool = new pg.Pool({
-    connectionString: directUrl,
-    max: 2,
-    connectionTimeoutMillis: 15_000,
-  });
-  const migClient = await migrationPool.connect();
-  try {
-    const migAdapter = { ...createPgQueryInterface(migClient), dialect: 'postgres' };
-    await migrateSchema(migAdapter);
-  } finally {
-    migClient.release();
-    await migrationPool.end();
+  const runtimePool =
+    dbInstance?.pool ||
+    new pg.Pool({
+      connectionString: pooledUrl,
+      max: ENV.IS_VERCEL ? 5 : 10,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 15_000,
+    });
+
+  if (!dbInstance?.pool) {
+    try {
+      attachDatabasePool(runtimePool);
+    } catch {}
   }
 
-  const runtimePool = new pg.Pool({
-    connectionString: pooledUrl,
-    max: 10,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 15_000,
-  });
+  let needsMigration = Boolean(forceMigrate);
+  if (!needsMigration) {
+    try {
+      const check = await runtimePool.query('SELECT id FROM business_settings WHERE id = 1 LIMIT 1');
+      if (!check.rows?.length) {
+        needsMigration = true;
+      }
+    } catch {
+      needsMigration = true;
+    }
+  }
+
+  if (needsMigration) {
+    const migrationPool = new pg.Pool({
+      connectionString: directUrl,
+      max: 2,
+      connectionTimeoutMillis: 15_000,
+    });
+    const migClient = await migrationPool.connect();
+    try {
+      const migAdapter = { ...createPgQueryInterface(migClient), dialect: 'postgres' };
+      await migrateSchema(migAdapter);
+    } finally {
+      migClient.release();
+      await migrationPool.end();
+    }
+  }
+
+  if (dbInstance && !customPath) return dbInstance;
 
   const base = createPgQueryInterface(runtimePool);
   const adapter = {

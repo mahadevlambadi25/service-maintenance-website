@@ -20,10 +20,15 @@ function collectJsFiles(dir) {
 
 loadLocalEnvFiles();
 
-const srcFiles = collectJsFiles(path.join(ROOT_DIR, 'src'));
+const srcFiles = [
+  ...collectJsFiles(path.join(ROOT_DIR, 'src')),
+  ...collectJsFiles(path.join(ROOT_DIR, 'api')),
+];
 for (const file of srcFiles) {
   execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' });
 }
+
+JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'vercel.json'), 'utf8'));
 
 const requiredPublicAssets = [
   'public/css/tokens.css',

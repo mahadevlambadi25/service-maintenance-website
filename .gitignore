@@ -1,7 +1,8 @@
-# Dependencies & Neon local link/env secrets
+# Dependencies & Neon / Vercel local link/env secrets
 node_modules/
 .neon
 .neon/
+.vercel
 .env
 .env.*
 !.env.example

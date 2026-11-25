@@ -8,6 +8,7 @@ import { resolveActiveCampaigns } from '../services/campaign-engine.js';
 import { parseCookies } from '../services/auth.js';
 import { buildJsonLdBreadcrumbs, renderPublicLayout } from '../views/layout.js';
 import * as Pages from '../views/public-pages.js';
+import { createObjectStore } from '../services/object-store.js';
 
 export async function getCanonicalSettings(db) {
   return db.prepare('SELECT * FROM business_settings WHERE id = 1').get();
@@ -131,8 +132,9 @@ export async function handlePublicRoute(req, res, db, urlObj, nonce, storagePath
       res.end('Not found');
       return true;
     }
-    const filePath = path.join(storagePaths.publicMedia, key);
-    if (!fs.existsSync(filePath)) {
+    const store = createObjectStore(storagePaths);
+    const mediaBuf = await store.getObjectBuffer({ area: 'publicMedia', key });
+    if (!mediaBuf) {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Not found');
       return true;
@@ -140,9 +142,10 @@ export async function handlePublicRoute(req, res, db, urlObj, nonce, storagePath
     const respMime = key.endsWith('.webp') ? 'image/webp' : key.endsWith('.jpg') || key.endsWith('.jpeg') ? 'image/jpeg' : matchedAsset.derivative_mime || 'image/jpeg';
     res.writeHead(200, {
       'Content-Type': respMime,
+      'Content-Length': mediaBuf.length,
       'Cache-Control': 'public, max-age=300, must-revalidate',
     });
-    fs.createReadStream(filePath).pipe(res);
+    res.end(mediaBuf);
     return true;
   }
 

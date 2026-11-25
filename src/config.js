@@ -1,8 +1,7 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseEnv } from '@neon/env';
-import neonConfig from '../neon.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT_DIR = path.resolve(__dirname, '..');
@@ -38,8 +37,23 @@ loadLocalEnvFiles();
 
 export function getValidatedNeonPostgresEnv() {
   if (!process.env.DATABASE_URL) return null;
-  const keys = process.env.DATABASE_URL_UNPOOLED ? ['DATABASE_URL', 'DATABASE_URL_UNPOOLED'] : ['DATABASE_URL'];
-  return parseEnv(neonConfig, keys).postgres;
+  const databaseUrl = String(process.env.DATABASE_URL || '').trim();
+  const databaseUrlUnpooled = String(process.env.DATABASE_URL_UNPOOLED || databaseUrl).trim();
+  if (!/^postgres(ql)?:\/\//i.test(databaseUrl)) {
+    throw new Error('Invalid DATABASE_URL: expected a PostgreSQL connection string.');
+  }
+  return { databaseUrl, databaseUrlUnpooled };
+}
+
+function resolveDefaultBaseUrl() {
+  if (process.env.BASE_URL) return process.env.BASE_URL.replace(/\/+$/, '');
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  }
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL}`;
+  }
+  return `http://127.0.0.1:${process.env.PORT || 3000}`;
 }
 
 export const DEV_FALLBACK_SESSION_SECRET = 'dev-session-secret-change-in-production-32chars';
@@ -62,13 +76,20 @@ export const ENV = {
   NODE_ENV: process.env.NODE_ENV || 'development',
   PORT: Number(process.env.PORT || 3000),
   HOST: process.env.HOST || '127.0.0.1',
-  BASE_URL: process.env.BASE_URL || `http://127.0.0.1:${process.env.PORT || 3000}`,
+  BASE_URL: resolveDefaultBaseUrl(),
+  IS_VERCEL: process.env.VERCEL === '1',
   DB_PATH: process.env.DB_PATH || path.join(ROOT_DIR, 'storage', 'private', 'service_maintenance.db'),
   DATABASE_URL: process.env.DATABASE_URL || '',
   DATABASE_URL_UNPOOLED: process.env.DATABASE_URL_UNPOOLED || '',
   NEON_BRANCH: process.env.NEON_BRANCH || '',
   NEON_BRANCH_ID: process.env.NEON_BRANCH_ID || '',
   NEON_FUNCTION_HOST_SUFFIX: process.env.NEON_FUNCTION_HOST_SUFFIX || '',
+  AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID || '',
+  AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY || '',
+  AWS_ENDPOINT_URL_S3: process.env.AWS_ENDPOINT_URL_S3 || '',
+  AWS_REGION: process.env.AWS_REGION || 'ap-southeast-1',
+  S3_BUCKET: process.env.S3_BUCKET || process.env.NEON_STORAGE_BUCKET || 'storage',
+  CRON_SECRET: process.env.CRON_SECRET || '',
   SESSION_SECRET: process.env.SESSION_SECRET || DEV_FALLBACK_SESSION_SECRET,
   IS_STAGING: process.env.APP_ENV === 'staging',
   FRESHSALES_DOMAIN: process.env.FRESHSALES_DOMAIN || '',
@@ -87,7 +108,11 @@ export const ENV = {
   BACKUP_KEEP_COUNT: Number(process.env.BACKUP_KEEP_COUNT || 14),
 };
 
-export function buildStoragePaths(storageRoot = path.join(ROOT_DIR, 'storage')) {
+export function buildStoragePaths(
+  storageRoot = process.env.VERCEL === '1'
+    ? path.join(os.tmpdir(), 'sm-runtime-storage')
+    : path.join(ROOT_DIR, 'storage')
+) {
   return {
     privateRoot: path.join(storageRoot, 'private'),
     resumes: path.join(storageRoot, 'private', 'resumes'),

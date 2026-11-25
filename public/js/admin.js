@@ -367,11 +367,65 @@
       if (mediaFeedback) mediaFeedback.textContent = 'Uploading, validating signatures, and stripping metadata...';
       try {
         const fd = new FormData(mediaForm);
-        const res = await fetch(mediaForm.action, {
-          method: 'POST',
-          headers: { 'X-CSRF-Token': csrfToken },
-          body: fd,
-        });
+        const fileInput = mediaForm.querySelector('input[type="file"]');
+        const rawFiles = Array.from(fileInput?.files || []).filter((f) => f && f.size > 0);
+        let res;
+
+        if (rawFiles.length > 0) {
+          const presignRes = await fetch('/admin/api/media/presign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+            body: JSON.stringify({
+              csrf_token: csrfToken,
+              files: rawFiles.map((f) => ({ name: f.name, size: f.size, type: f.type || 'application/octet-stream' })),
+            }),
+          });
+          const presignData = await presignRes.json().catch(() => ({}));
+          if (!presignRes.ok) {
+            throw new Error(presignData.message || 'Upload pre-check failed.');
+          }
+
+          if (presignData.mode === 's3_presigned_put' && Array.isArray(presignData.uploads)) {
+            if (mediaFeedback) mediaFeedback.textContent = 'Uploading original image(s) directly to object storage...';
+            const stagedFiles = [];
+            for (let idx = 0; idx < presignData.uploads.length; idx++) {
+              const u = presignData.uploads[idx];
+              const fileObj = rawFiles[idx];
+              const putRes = await fetch(u.url, {
+                method: 'PUT',
+                headers: u.headers || { 'Content-Type': fileObj.type || 'application/octet-stream' },
+                body: fileObj,
+              });
+              if (!putRes.ok) {
+                throw new Error(`Direct S3 upload failed for ${fileObj.name} (${putRes.status}).`);
+              }
+              stagedFiles.push({ stagingKey: u.stagingKey, originalName: u.originalName });
+            }
+            if (mediaFeedback) mediaFeedback.textContent = 'Processing EXIF orientation and responsive WebP/JPEG variants...';
+            res = await fetch('/admin/api/media/finalize', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+              body: JSON.stringify({
+                csrf_token: csrfToken,
+                alt_text: String(fd.get('alt_text') || ''),
+                rights_owner: String(fd.get('rights_owner') || 'Internal'),
+                staged_files: stagedFiles,
+              }),
+            });
+          } else {
+            res = await fetch(mediaForm.action, {
+              method: 'POST',
+              headers: { 'X-CSRF-Token': csrfToken },
+              body: fd,
+            });
+          }
+        } else {
+          res = await fetch(mediaForm.action, {
+            method: 'POST',
+            headers: { 'X-CSRF-Token': csrfToken },
+            body: fd,
+          });
+        }
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
           const msg = `Uploaded ${data.accepted?.length || 0} file(s). Rejected: ${data.rejected?.length || 0}.`;

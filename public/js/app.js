@@ -372,6 +372,54 @@
 
       try {
         const fd = new FormData(activeForm);
+        const fileInputs = Array.from(activeForm.querySelectorAll('input[type="file"]'));
+        const selectedFiles = fileInputs.flatMap((inp) =>
+          Array.from(inp.files || []).filter((f) => f && f.size > 0).map((f) => ({ inputName: inp.name, file: f }))
+        );
+
+        if (selectedFiles.length > 0) {
+          const purpose = formType === 'application' ? 'resume' : 'inquiry';
+          const presignRes = await fetch('/api/uploads/presign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              purpose,
+              files: selectedFiles.map((s) => ({
+                name: s.file.name,
+                size: s.file.size,
+                type: s.file.type || 'application/octet-stream',
+              })),
+            }),
+          });
+          const presignData = await presignRes.json().catch(() => ({}));
+          if (!presignRes.ok) {
+            throw new Error(presignData.message || 'File upload pre-check failed.');
+          }
+          if (presignData.mode === 's3_presigned_put' && Array.isArray(presignData.uploads)) {
+            if (uploadStatus) uploadStatus.textContent = 'Uploading file(s) securely to object storage...';
+            const tokens = [];
+            for (let idx = 0; idx < presignData.uploads.length; idx++) {
+              const u = presignData.uploads[idx];
+              const fileObj = selectedFiles[idx].file;
+              const putRes = await fetch(u.url, {
+                method: 'PUT',
+                headers: u.headers || { 'Content-Type': fileObj.type || 'application/octet-stream' },
+                body: fileObj,
+              });
+              if (!putRes.ok) {
+                throw new Error(`Direct upload failed for ${fileObj.name} (${putRes.status}).`);
+              }
+              tokens.push(u.upload_token);
+            }
+            for (const inp of fileInputs) fd.delete(inp.name);
+            if (purpose === 'resume' && tokens[0]) {
+              fd.set('staged_resume_token', tokens[0]);
+            } else if (tokens.length > 0) {
+              fd.set('staged_uploads', JSON.stringify(tokens));
+            }
+          }
+        }
+
         const utms = getAcquisitionUtms();
         fd.append('acquisition_utms_json', JSON.stringify(utms));
         fd.append('landing_page', sessionStorage.getItem('sm_first_landing') || window.location.pathname);
@@ -423,14 +471,17 @@
         // Storage outage / 503 / 429 / 413 — preserve safe entries and offer fallback!
         if (serverFailBanner) {
           if (data.message) {
-            serverFailBanner.innerHTML = `<strong>Submission not confirmed:</strong> ${data.message}`;
+            serverFailBanner.textContent = `Submission not confirmed: ${data.message}`;
           }
           serverFailBanner.hidden = false;
           serverFailBanner.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
         sendAnalytics('form_error', { form_id: formType, error_code: `http_${res.status}` });
-      } catch {
+      } catch (err) {
         if (serverFailBanner) {
+          if (err?.message) {
+            serverFailBanner.textContent = `Submission not confirmed: ${err.message}`;
+          }
           serverFailBanner.hidden = false;
           serverFailBanner.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }

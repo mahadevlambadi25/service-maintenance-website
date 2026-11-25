@@ -1,7 +1,7 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { generateUuid } from '../lib/crypto.js';
 import { recordAudit } from './auth.js';
+import { createObjectStore } from './object-store.js';
 
 /**
  * Automated Retention & Deletion Service (PRD 17.09 & 21.03).
@@ -58,6 +58,7 @@ export async function runRetentionSweep(db, { storagePaths, actor = null, nowDat
   const nowIso = nowDate.toISOString();
   const actorName = actor?.full_name || 'Retention Scheduler';
   const policies = await listRetentionPolicies(db);
+  const store = createObjectStore(storagePaths);
 
   const purged = {
     quarantined_spam_uploads: 0,
@@ -91,10 +92,7 @@ export async function runRetentionSweep(db, { storagePaths, actor = null, nowDat
         .all(cutoffIso);
       if (!dryRun) {
         for (const att of targets) {
-          const fp = path.join(storagePaths.quarantine, path.basename(att.storage_key));
-          if (fs.existsSync(fp)) {
-            try { fs.unlinkSync(fp); } catch {}
-          }
+          await store.deleteObject({ area: 'quarantine', key: path.basename(att.storage_key) });
           await db.prepare('DELETE FROM inquiry_attachments WHERE attachment_id = ?').run(att.attachment_id);
           await logDeletion(db, {
             objectType: 'inquiry_attachment',
@@ -142,10 +140,7 @@ export async function runRetentionSweep(db, { storagePaths, actor = null, nowDat
         for (const inq of oldInquiries) {
           const atts = await db.prepare('SELECT attachment_id, storage_key FROM inquiry_attachments WHERE inquiry_id = ?').all(inq.inquiry_id);
           for (const a of atts) {
-            const fp = path.join(storagePaths.quarantine, path.basename(a.storage_key));
-            if (fs.existsSync(fp)) {
-              try { fs.unlinkSync(fp); } catch {}
-            }
+            await store.deleteObject({ area: 'quarantine', key: path.basename(a.storage_key) });
             await logDeletion(db, {
               objectType: 'inquiry_attachment',
               objectId: a.attachment_id,
@@ -179,10 +174,7 @@ export async function runRetentionSweep(db, { storagePaths, actor = null, nowDat
         for (const app of oldApps) {
           const resAtts = await db.prepare('SELECT attachment_id, storage_key FROM application_attachments WHERE application_id = ?').all(app.application_id);
           for (const ra of resAtts) {
-            const fp = path.join(storagePaths.resumes, path.basename(ra.storage_key));
-            if (fs.existsSync(fp)) {
-              try { fs.unlinkSync(fp); } catch {}
-            }
+            await store.deleteObject({ area: 'resumes', key: path.basename(ra.storage_key) });
             await logDeletion(db, {
               objectType: 'application_attachment',
               objectId: ra.attachment_id,

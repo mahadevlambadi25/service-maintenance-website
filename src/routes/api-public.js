@@ -1,12 +1,35 @@
+import path from 'node:path';
 import { CONSENT_VERSION, ENV, PRIVACY_NOTICE_VERSION, SERVICE_FAMILIES, STORAGE_PATHS, UPLOAD_LIMITS } from '../config.js';
-import { generateUuid, sha256Hex } from '../lib/crypto.js';
+import { generateUuid, sha256Hex, signHmac, verifyHmac } from '../lib/crypto.js';
 import { processPrivateDocumentUploadAsync } from '../lib/media-processor.js';
 import { parseRequestBody } from '../lib/multipart.js';
 import { normalizePhone, validateApplicationPayload, validateInquiryPayload, validateServiceRequestPayload } from '../lib/validation.js';
 import { addBusinessDaysPhoenix } from '../lib/time.js';
 import { checkRateLimit } from '../services/auth.js';
 import { recordAnalyticsEvent } from '../services/analytics.js';
-import { processDeliveryQueues } from '../services/delivery-worker.js';
+import { processDeliveryQueues, scheduleBackgroundWork } from '../services/delivery-worker.js';
+import { createObjectStore } from '../services/object-store.js';
+
+function createSignedUploadToken(payload) {
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sig = signHmac(encoded, ENV.SESSION_SECRET);
+  return `${encoded}.${sig}`;
+}
+
+function verifySignedUploadToken(token, expectedPurpose) {
+  if (!token || typeof token !== 'string' || !token.includes('.')) return null;
+  const [encoded, sig] = token.split('.');
+  if (!verifyHmac(encoded, sig, ENV.SESSION_SECRET)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    if (!parsed || parsed.purpose !== expectedPurpose) return null;
+    if (!parsed.expiresAt || Number(parsed.expiresAt) < Date.now()) return null;
+    if (!parsed.stagingKey || !String(parsed.stagingKey).startsWith(`public/${expectedPurpose}/`)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 // Simulated durable storage failure hook for staging acceptance testing (FORM-05 / HIRE-05)
 let simulateStorageFailure = false;
@@ -79,6 +102,63 @@ export async function handlePublicApi(req, res, db, urlObj, storagePaths = STORA
     const { fields } = await parseRequestBody(req, 64 * 1024);
     const result = await recordAnalyticsEvent(db, fields);
     sendJson(res, result.ok ? 202 : 400, result);
+    return true;
+  }
+
+  // 2b. Direct Presigned Upload Request (Supports > 4.5 MB attachments/resumes on Vercel via S3/Neon Object Storage)
+  if (pathname === '/api/uploads/presign' && req.method === 'POST') {
+    const rl = checkRateLimit(`presign:${ip}`, 30, 60_000);
+    if (!rl.allowed) {
+      sendJson(res, 429, { ok: false, message: 'Too many upload requests. Please wait a moment.' }, { 'Retry-After': String(rl.retryAfterSec) });
+      return true;
+    }
+    const { fields } = await parseRequestBody(req, 64 * 1024);
+    const purpose = fields.purpose === 'resume' ? 'resume' : 'inquiry';
+    const items = Array.isArray(fields.files) ? fields.files : [];
+    const limits = purpose === 'resume' ? UPLOAD_LIMITS.resume : UPLOAD_LIMITS.inquiry;
+
+    if (items.length === 0 || items.length > limits.maxFiles) {
+      sendJson(res, 422, { ok: false, message: `Select between 1 and ${limits.maxFiles} file(s).` });
+      return true;
+    }
+    const totalBytes = items.reduce((s, f) => s + Number(f.size || 0), 0);
+    if (limits.maxTotalBytes && totalBytes > limits.maxTotalBytes) {
+      sendJson(res, 413, { ok: false, message: 'Total attachments exceed the 25 MB limit.' });
+      return true;
+    }
+
+    const store = createObjectStore(storagePaths);
+    if (store.mode !== 's3') {
+      sendJson(res, 200, { ok: true, mode: 'direct_multipart', uploads: [] });
+      return true;
+    }
+
+    const uploads = [];
+    for (const f of items) {
+      const byteSize = Number(f.size || 0);
+      const mime = String(f.type || 'application/octet-stream').toLowerCase();
+      const origName = path.basename(String(f.name || 'document')).slice(0, 140);
+      if (byteSize <= 0 || byteSize > limits.maxFileBytes) {
+        sendJson(res, 413, { ok: false, message: `${origName}: exceeds ${(limits.maxFileBytes / (1024 * 1024)).toFixed(0)} MB per-file limit.` });
+        return true;
+      }
+      if (!limits.allowedTypes.includes(mime)) {
+        sendJson(res, 422, { ok: false, message: `${origName}: unsupported file type.` });
+        return true;
+      }
+      const stagingKey = `public/${purpose}/${generateUuid()}-${origName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+      const presigned = await store.createPresignedUpload({ key: stagingKey, contentType: mime, expiresIn: 600 });
+      const upload_token = createSignedUploadToken({
+        purpose,
+        stagingKey: presigned.stagingKey,
+        originalName: origName,
+        maxBytes: limits.maxFileBytes,
+        expiresAt: Date.now() + 600_000,
+      });
+      uploads.push({ ...presigned, originalName: origName, upload_token });
+    }
+
+    sendJson(res, 200, { ok: true, mode: 's3_presigned_put', uploads });
     return true;
   }
 
@@ -155,7 +235,21 @@ export async function handlePublicApi(req, res, db, urlObj, storagePaths = STORA
       return true;
     }
 
-    // Process optional attachments securely
+    // Process optional attachments securely (direct multipart OR verified staged S3 uploads)
+    let stagedTokens = [];
+    if (fields.staged_uploads) {
+      try {
+        stagedTokens = typeof fields.staged_uploads === 'string' ? JSON.parse(fields.staged_uploads) : fields.staged_uploads;
+      } catch {
+        stagedTokens = [];
+      }
+      if (!Array.isArray(stagedTokens)) stagedTokens = [];
+    }
+    if (uploadFiles.length + stagedTokens.length > UPLOAD_LIMITS.inquiry.maxFiles) {
+      sendJson(res, 413, { ok: false, message: 'Up to 5 attachments are permitted per inquiry.' });
+      return true;
+    }
+
     const processedFiles = [];
     for (const f of uploadFiles) {
       const resFile = await processPrivateDocumentUploadAsync({
@@ -164,6 +258,8 @@ export async function handlePublicApi(req, res, db, urlObj, storagePaths = STORA
         allowedTypes: UPLOAD_LIMITS.inquiry.allowedTypes,
         maxBytes: UPLOAD_LIMITS.inquiry.maxFileBytes,
         destDir: storagePaths.quarantine,
+        storagePaths,
+        area: 'quarantine',
       });
       if (!resFile.ok) {
         sendJson(res, 422, {
@@ -174,6 +270,50 @@ export async function handlePublicApi(req, res, db, urlObj, storagePaths = STORA
         return true;
       }
       processedFiles.push(resFile.file);
+    }
+
+    if (stagedTokens.length > 0) {
+      const store = createObjectStore(storagePaths);
+      let stagedTotalBytes = totalAttachBytes;
+      for (const tok of stagedTokens) {
+        const verified = verifySignedUploadToken(tok, 'inquiry');
+        if (!verified) {
+          sendJson(res, 422, { ok: false, message: 'Invalid or expired attachment upload token. Please re-attach and submit.' });
+          return true;
+        }
+        try {
+          const buf = await store.getObjectBuffer({ area: 'staging', key: verified.stagingKey });
+          if (!buf) {
+            sendJson(res, 422, { ok: false, message: `Uploaded attachment (${verified.originalName}) missing from staging.` });
+            return true;
+          }
+          stagedTotalBytes += buf.length;
+          if (stagedTotalBytes > UPLOAD_LIMITS.inquiry.maxTotalBytes) {
+            sendJson(res, 413, { ok: false, message: 'Total attachments exceed the 25 MB limit.' });
+            return true;
+          }
+          const resFile = await processPrivateDocumentUploadAsync({
+            buffer: buf,
+            originalName: verified.originalName,
+            allowedTypes: UPLOAD_LIMITS.inquiry.allowedTypes,
+            maxBytes: UPLOAD_LIMITS.inquiry.maxFileBytes,
+            destDir: storagePaths.quarantine,
+            storagePaths,
+            area: 'quarantine',
+          });
+          if (!resFile.ok) {
+            sendJson(res, 422, {
+              ok: false,
+              errors: { attachments: `${verified.originalName}: ${resFile.message}` },
+              message: `Attachment rejected (${verified.originalName}): ${resFile.message}`,
+            });
+            return true;
+          }
+          processedFiles.push(resFile.file);
+        } finally {
+          await store.deleteObject({ area: 'staging', key: verified.stagingKey });
+        }
+      }
     }
 
     const now = new Date();
@@ -333,8 +473,8 @@ export async function handlePublicApi(req, res, db, urlObj, storagePaths = STORA
       return true;
     }
 
-    // Trigger immediate async worker pass (non-blocking for response reliability, or awaited briefly)
-    processDeliveryQueues(db).catch(() => {});
+    // Trigger immediate async worker pass (uses @vercel/functions waitUntil when on Vercel)
+    scheduleBackgroundWork(processDeliveryQueues(db));
 
     sendFormOutcome(req, res, 201, {
       ok: true,
@@ -452,7 +592,7 @@ export async function handlePublicApi(req, res, db, urlObj, storagePaths = STORA
       return true;
     }
 
-    processDeliveryQueues(db).catch(() => {});
+    scheduleBackgroundWork(processDeliveryQueues(db));
     sendFormOutcome(req, res, 201, {
       ok: true,
       inquiry_id: inquiryId,
@@ -487,6 +627,8 @@ export async function handlePublicApi(req, res, db, urlObj, storagePaths = STORA
     const idempotencyKey = String(req.headers['idempotency-key'] || fields.idempotency_key || generateUuid()).trim().slice(0, 100);
     const resumeFile = files.find((f) => f.buffer && f.buffer.length > 0) || null;
 
+    const stagedResumeToken = String(fields.staged_resume_token || '').trim();
+
     // Look up job by slug
     const job = await db.prepare('SELECT * FROM jobs WHERE slug = ?').get(slug);
     if (!job) {
@@ -495,7 +637,7 @@ export async function handlePublicApi(req, res, db, urlObj, storagePaths = STORA
     }
 
     // Validate fields against presented job schema
-    const validation = validateApplicationPayload({ ...fields, has_resume: Boolean(resumeFile) }, job);
+    const validation = validateApplicationPayload({ ...fields, has_resume: Boolean(resumeFile || stagedResumeToken) }, job);
     if (!validation.valid) {
       sendJson(res, 422, { ok: false, errors: validation.errors, message: 'Please review the highlighted fields.' });
       return true;
@@ -534,6 +676,8 @@ export async function handlePublicApi(req, res, db, urlObj, storagePaths = STORA
         allowedTypes: UPLOAD_LIMITS.resume.allowedTypes,
         maxBytes: UPLOAD_LIMITS.resume.maxFileBytes,
         destDir: storagePaths.resumes,
+        storagePaths,
+        area: 'resumes',
       });
       if (!resCheck.ok) {
         sendJson(res, 422, {
@@ -544,6 +688,40 @@ export async function handlePublicApi(req, res, db, urlObj, storagePaths = STORA
         return true;
       }
       processedResume = resCheck.file;
+    } else if (stagedResumeToken) {
+      const verified = verifySignedUploadToken(stagedResumeToken, 'resume');
+      if (!verified) {
+        sendJson(res, 422, { ok: false, message: 'Invalid or expired resume upload token. Please re-attach your resume.' });
+        return true;
+      }
+      const store = createObjectStore(storagePaths);
+      try {
+        const buf = await store.getObjectBuffer({ area: 'staging', key: verified.stagingKey });
+        if (!buf) {
+          sendJson(res, 422, { ok: false, message: 'Staged resume missing. Please retry uploading.' });
+          return true;
+        }
+        const resCheck = await processPrivateDocumentUploadAsync({
+          buffer: buf,
+          originalName: verified.originalName,
+          allowedTypes: UPLOAD_LIMITS.resume.allowedTypes,
+          maxBytes: UPLOAD_LIMITS.resume.maxFileBytes,
+          destDir: storagePaths.resumes,
+          storagePaths,
+          area: 'resumes',
+        });
+        if (!resCheck.ok) {
+          sendJson(res, 422, {
+            ok: false,
+            errors: { resume: `${resCheck.message} You may submit using the relevant-experience field without attaching a resume.` },
+            message: resCheck.message,
+          });
+          return true;
+        }
+        processedResume = resCheck.file;
+      } finally {
+        await store.deleteObject({ area: 'staging', key: verified.stagingKey });
+      }
     }
 
     const nowIso = new Date().toISOString();
@@ -712,7 +890,7 @@ export async function handlePublicApi(req, res, db, urlObj, storagePaths = STORA
       return true;
     }
 
-    processDeliveryQueues(db).catch(() => {});
+    scheduleBackgroundWork(processDeliveryQueues(db));
 
     sendFormOutcome(req, res, 201, {
       ok: true,

@@ -3,6 +3,7 @@ import path from 'node:path';
 import heicConvert from 'heic-convert';
 import sharp from 'sharp';
 import { UPLOAD_LIMITS } from '../config.js';
+import { createObjectStore } from '../services/object-store.js';
 import { generateUuid, sha256Hex } from './crypto.js';
 import { scanBufferStatic, scanUploadedBuffer } from '../services/malware-scanner.js';
 
@@ -340,13 +341,16 @@ export async function processProjectImageUploadAsync({ buffer, originalName, sto
   const finalWidth = rotatedMeta.width;
   const finalHeight = rotatedMeta.height;
 
+  const store = createObjectStore(storagePaths);
   const assetId = generateUuid();
   const originalKey = `${assetId}.${sig.ext}`;
-  const originalPath = path.join(storagePaths.originals, originalKey);
-  fs.mkdirSync(storagePaths.originals, { recursive: true });
-  fs.writeFileSync(originalPath, buffer);
+  await store.putObject({
+    area: 'originals',
+    key: originalKey,
+    buffer,
+    contentType: sig.mime,
+  });
 
-  fs.mkdirSync(storagePaths.publicMedia, { recursive: true });
   const sizes = [
     { name: 'desktop', width: 1600 },
     { name: 'tablet', width: 960 },
@@ -354,26 +358,43 @@ export async function processProjectImageUploadAsync({ buffer, originalName, sto
   ];
 
   const variants = { webp: {}, jpeg: {}, width: finalWidth, height: finalHeight };
+  let primaryBytes = 0;
   for (const sz of sizes) {
     const webpKey = `${assetId}-${sz.name}.webp`;
     const jpgKey = `${assetId}-${sz.name}.jpg`;
 
-    await sharp(baseRotatedBuf)
+    const webpBuf = await sharp(baseRotatedBuf)
       .resize({ width: sz.width, withoutEnlargement: true })
       .webp({ quality: 82 })
-      .toFile(path.join(storagePaths.publicMedia, webpKey));
+      .toBuffer();
 
-    await sharp(baseRotatedBuf)
+    const jpgBuf = await sharp(baseRotatedBuf)
       .resize({ width: sz.width, withoutEnlargement: true })
       .jpeg({ quality: 84, mozjpeg: true })
-      .toFile(path.join(storagePaths.publicMedia, jpgKey));
+      .toBuffer();
 
+    await store.putObject({
+      area: 'publicMedia',
+      key: webpKey,
+      buffer: webpBuf,
+      contentType: 'image/webp',
+      cacheControl: 'public, max-age=300, must-revalidate',
+    });
+
+    await store.putObject({
+      area: 'publicMedia',
+      key: jpgKey,
+      buffer: jpgBuf,
+      contentType: 'image/jpeg',
+      cacheControl: 'public, max-age=300, must-revalidate',
+    });
+
+    if (sz.name === 'desktop') primaryBytes = jpgBuf.length;
     variants.webp[sz.name] = webpKey;
     variants.jpeg[sz.name] = jpgKey;
   }
 
   const primaryKey = variants.jpeg.desktop;
-  const primaryStats = fs.statSync(path.join(storagePaths.publicMedia, primaryKey));
 
   return {
     ok: true,
@@ -383,7 +404,7 @@ export async function processProjectImageUploadAsync({ buffer, originalName, sto
       mime_type: sig.mime,
       derivative_mime: 'image/jpeg',
       byte_size: buffer.length,
-      derivative_bytes: primaryStats.size,
+      derivative_bytes: primaryBytes,
       width: finalWidth,
       height: finalHeight,
       orientation: originalOrientation,
@@ -458,7 +479,15 @@ export function processProjectImageUpload({ buffer, originalName, storagePaths }
   };
 }
 
-export async function processPrivateDocumentUploadAsync({ buffer, originalName, allowedTypes, maxBytes, destDir }) {
+export async function processPrivateDocumentUploadAsync({
+  buffer,
+  originalName,
+  allowedTypes,
+  maxBytes,
+  destDir,
+  storagePaths = null,
+  area = null,
+}) {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
     return { ok: false, errorCode: 'empty_file', message: 'Uploaded file is empty.' };
   }
@@ -478,8 +507,23 @@ export async function processPrivateDocumentUploadAsync({ buffer, originalName, 
   const scan = await scanUploadedBuffer(buffer, { mime: sig.mime, originalName });
   const objectId = generateUuid();
   const storageKey = `${objectId}.bin`;
-  fs.mkdirSync(destDir, { recursive: true });
-  fs.writeFileSync(path.join(destDir, storageKey), buffer);
+  const resolvedArea = area || (destDir ? path.basename(destDir) : 'quarantine');
+  if (storagePaths || resolvedArea === 'quarantine' || resolvedArea === 'resumes') {
+    const resolvedPaths = storagePaths || {
+      resumes: resolvedArea === 'resumes' ? destDir : undefined,
+      quarantine: resolvedArea === 'quarantine' ? destDir : undefined,
+    };
+    const store = createObjectStore(resolvedPaths);
+    await store.putObject({
+      area: resolvedArea,
+      key: storageKey,
+      buffer,
+      contentType: sig.mime,
+    });
+  } else {
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.writeFileSync(path.join(destDir, storageKey), buffer);
+  }
 
   return {
     ok: true,

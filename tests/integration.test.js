@@ -15,6 +15,8 @@ import { clearMailerTokenCache, setMailerFetch } from '../src/services/mailer.js
 import { runScheduleEvaluation } from '../src/services/campaign-engine.js';
 import { processDeliveryQueues } from '../src/services/delivery-worker.js';
 import { setCustomMalwareScanner } from '../src/services/malware-scanner.js';
+import { setCustomS3Client } from '../src/services/object-store.js';
+import { S3Client } from '@aws-sdk/client-s3';
 
 function makePngBytes(width = 800, height = 600, secretText = 'GPS_HIDDEN_EXIF') {
   const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -73,6 +75,8 @@ async function loginAs(baseUrl, email, secretOverride = null) {
 }
 
 test('Full PRD P0 Acceptance Register Integration Suite', async (t) => {
+  const prevDisableS3 = process.env.DISABLE_S3_STORAGE;
+  process.env.DISABLE_S3_STORAGE = '1';
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-int-'));
   const dbPath = path.join(tmpDir, 'test.db');
   const storageRoot = path.join(tmpDir, 'storage');
@@ -83,6 +87,8 @@ test('Full PRD P0 Acceptance Register Integration Suite', async (t) => {
   const baseUrl = `http://127.0.0.1:${addr.port}`;
 
   t.after(async () => {
+    if (prevDisableS3 === undefined) delete process.env.DISABLE_S3_STORAGE;
+    else process.env.DISABLE_S3_STORAGE = prevDisableS3;
     server.close();
     await db.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1657,5 +1663,214 @@ test('Full PRD P0 Acceptance Register Integration Suite', async (t) => {
     assert.equal(await db.prepare('SELECT * FROM inquiries WHERE inquiry_id = ?').get(spamInqId), undefined);
     assert.ok(await db.prepare('SELECT * FROM inquiries WHERE inquiry_id = ?').get(heldInqId));
     assert.ok(sweepRes.skippedPendingApproval.some((s) => s.policy_key === 'recruiting_applicants_and_resumes'));
+  });
+
+  await t.test('VERCEL-S3-01: Neon Object Storage S3 persistence, large >4.5MB presigned inquiry/media, and S3 backups', async () => {
+    const s3Objects = new Map();
+    const mockS3 = new S3Client({
+      region: 'ap-southeast-1',
+      endpoint: 'https://mock-neon-storage.local',
+      forcePathStyle: true,
+      credentials: { accessKeyId: 'testkey', secretAccessKey: 'testsecret' },
+    });
+    mockS3.send = async (cmd) => {
+      const name = cmd.constructor?.name || '';
+      const key = `${cmd.input.Bucket}/${cmd.input.Key}`;
+      if (name === 'PutObjectCommand') {
+        s3Objects.set(key, { Body: Buffer.from(cmd.input.Body), ContentType: cmd.input.ContentType });
+        return {};
+      }
+      if (name === 'GetObjectCommand') {
+        const obj = s3Objects.get(key);
+        if (!obj) {
+          const err = new Error('NoSuchKey');
+          err.name = 'NoSuchKey';
+          throw err;
+        }
+        return { Body: { transformToByteArray: async () => new Uint8Array(obj.Body) }, ContentType: obj.ContentType };
+      }
+      if (name === 'HeadObjectCommand') {
+        if (!s3Objects.has(key)) {
+          const err = new Error('NotFound');
+          err.name = 'NotFound';
+          throw err;
+        }
+        return { ContentLength: s3Objects.get(key).Body.length };
+      }
+      if (name === 'DeleteObjectCommand') {
+        s3Objects.delete(key);
+        return {};
+      }
+      if (name === 'ListObjectsV2Command') {
+        const prefix = `${cmd.input.Bucket}/${cmd.input.Prefix || ''}`;
+        const Contents = [];
+        for (const [fullK, val] of s3Objects.entries()) {
+          if (fullK.startsWith(prefix)) {
+            Contents.push({ Key: fullK.slice(cmd.input.Bucket.length + 1), Size: val.Body.length });
+          }
+        }
+        return { Contents, IsTruncated: false };
+      }
+      throw new Error(`Unsupported S3 cmd in test: ${name}`);
+    };
+
+    setCustomS3Client(mockS3);
+    try {
+      // 1. Forged upload token is rejected
+      const forgedRes = await fetch(`${baseUrl}/api/inquiries`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 's3-forged-1' },
+        body: JSON.stringify({
+          name: 'Taylor Brooks',
+          company: 'Pacific Facilities LLC',
+          preferred_contact_method: 'email',
+          email: 'taylor@pacificfacilities.com',
+          service_needed: 'day-porter',
+          property_city_or_zip: 'Phoenix, AZ 85004',
+          description: 'Testing forged upload token rejection.',
+          staged_uploads: ['forged.invalid_sig'],
+        }),
+      });
+      assert.equal(forgedRes.status, 422);
+
+      // 2. Presigned large >4.5 MB PDF inquiry upload (5.1 MB)
+      const largePdf = Buffer.concat([Buffer.from('%PDF-1.4\n%large\n'), Buffer.alloc(5.1 * 1024 * 1024, 0x20)]);
+      const presignRes = await fetch(`${baseUrl}/api/uploads/presign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          purpose: 'inquiry',
+          files: [{ name: 'site-plans.pdf', size: largePdf.length, type: 'application/pdf' }],
+        }),
+      });
+      assert.equal(presignRes.status, 200);
+      const presignJson = await presignRes.json();
+      assert.equal(presignJson.mode, 's3_presigned_put');
+      assert.ok(presignJson.uploads[0].url.includes('X-Amz-Signature'));
+
+      // Simulate browser PUT directly into mock Neon Object Storage staging key
+      const stagedKey = presignJson.uploads[0].stagingKey;
+      s3Objects.set(`${presignJson.uploads[0].bucket}/staging/${stagedKey}`, { Body: largePdf, ContentType: 'application/pdf' });
+
+      const inqRes = await fetch(`${baseUrl}/api/inquiries`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 's3-large-pdf-1' },
+        body: JSON.stringify({
+          name: 'Taylor Brooks',
+          company: 'Pacific Facilities LLC',
+          preferred_contact_method: 'email',
+          email: 'taylor@pacificfacilities.com',
+          service_needed: 'day-porter',
+          property_city_or_zip: 'Phoenix, AZ 85004',
+          description: 'Large 5.1 MB drawing upload via S3 presigned URL.',
+          staged_uploads: [presignJson.uploads[0].upload_token],
+        }),
+      });
+      assert.equal(inqRes.status, 201);
+      const inqJson = await inqRes.json();
+      // Staging object deleted after move to quarantine
+      assert.equal(s3Objects.has(`${presignJson.uploads[0].bucket}/staging/${stagedKey}`), false);
+
+      const admin = await loginAs(baseUrl, 'admin@smiaz.local');
+      const attRow = await db.prepare('SELECT * FROM inquiry_attachments WHERE inquiry_id = ?').get(inqJson.inquiry_id);
+      assert.equal(attRow.byte_size, largePdf.length);
+      const dlRes = await fetch(`${baseUrl}/admin/api/inquiries/${inqJson.inquiry_id}/attachments/${attRow.attachment_id}`, {
+        headers: { Cookie: admin.cookie },
+      });
+      assert.equal(dlRes.status, 200);
+      const dlBuf = Buffer.from(await dlRes.arrayBuffer());
+      assert.equal(dlBuf.length, largePdf.length);
+
+      // 3. Admin Media presign + finalize + public /media/<key> serving from S3
+      const pub = await loginAs(baseUrl, 'publisher@smiaz.local');
+      const pngBytes = await sharp({
+        create: { width: 320, height: 240, channels: 3, background: { r: 70, g: 90, b: 110 } },
+      })
+        .png()
+        .toBuffer();
+
+      const mPre = await fetch(`${baseUrl}/admin/api/media/presign`, {
+        method: 'POST',
+        headers: { Cookie: pub.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': pub.csrf },
+        body: JSON.stringify({ csrf_token: pub.csrf, files: [{ name: 'exterior.png', size: pngBytes.length, type: 'image/png' }] }),
+      });
+      assert.equal(mPre.status, 200);
+      const mPreJson = await mPre.json();
+      assert.equal(mPreJson.mode, 's3_presigned_put');
+      s3Objects.set(`${mPreJson.uploads[0].bucket}/staging/${mPreJson.uploads[0].stagingKey}`, {
+        Body: pngBytes,
+        ContentType: 'image/png',
+      });
+
+      const mFin = await fetch(`${baseUrl}/admin/api/media/finalize`, {
+        method: 'POST',
+        headers: { Cookie: pub.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': pub.csrf },
+        body: JSON.stringify({
+          csrf_token: pub.csrf,
+          alt_text: 'S3 Finalized Photo',
+          rights_owner: 'Service Maintenance',
+          staged_files: [{ stagingKey: mPreJson.uploads[0].stagingKey, originalName: 'exterior.png' }],
+        }),
+      });
+      assert.equal(mFin.status, 201);
+      const mFinJson = await mFin.json();
+      const assetId = mFinJson.accepted[0].asset_id;
+      const derKey = mFinJson.accepted[0].public_derivative_key;
+
+      await fetch(`${baseUrl}/admin/api/media/${assetId}/approve-rights`, {
+        method: 'POST',
+        headers: { Cookie: pub.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': pub.csrf },
+        body: JSON.stringify({ csrf_token: pub.csrf }),
+      });
+      await db.prepare('UPDATE media_assets SET is_public_published = 1 WHERE asset_id = ?').run(assetId);
+      const mediaServe = await fetch(`${baseUrl}/media/${derKey}`);
+      assert.equal(mediaServe.status, 200);
+      assert.equal(mediaServe.headers.get('content-type'), 'image/jpeg');
+
+      // 4. S3 Backup & Integrity Verify
+      const bakRes = await (
+        await fetch(`${baseUrl}/admin/api/backups/create`, {
+          method: 'POST',
+          headers: { Cookie: admin.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': admin.csrf },
+          body: JSON.stringify({ csrf_token: admin.csrf }),
+        })
+      ).json();
+      assert.equal(bakRes.ok, true);
+      assert.ok(bakRes.backup_dir.startsWith('s3:backup-'));
+      const verRes = await (
+        await fetch(`${baseUrl}/admin/api/backups/${bakRes.backup_id}/verify`, {
+          method: 'POST',
+          headers: { Cookie: admin.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': admin.csrf },
+          body: JSON.stringify({ csrf_token: admin.csrf }),
+        })
+      ).json();
+      assert.equal(verRes.ok, true);
+    } finally {
+      setCustomS3Client(null);
+    }
+  });
+
+  await t.test('VERCEL-CRON-02: /api/health and /api/cron/worker require valid CRON_SECRET', async () => {
+    const prevCron = process.env.CRON_SECRET;
+    process.env.CRON_SECRET = 'cron-test-secret-xyz-123456';
+    try {
+      const health = await (await fetch(`${baseUrl}/api/health`)).json();
+      assert.equal(health.ok, true);
+      assert.equal(health.dialect, 'sqlite');
+
+      const unauth = await fetch(`${baseUrl}/api/cron/worker`);
+      assert.equal(unauth.status, 401);
+
+      const authRes = await fetch(`${baseUrl}/api/cron/worker`, {
+        headers: { Authorization: 'Bearer cron-test-secret-xyz-123456' },
+      });
+      assert.equal(authRes.status, 200);
+      const authJson = await authRes.json();
+      assert.equal(authJson.ok, true);
+      assert.equal(authJson.schedule.ok, true);
+    } finally {
+      if (prevCron === undefined) delete process.env.CRON_SECRET;
+      else process.env.CRON_SECRET = prevCron;
+    }
   });
 });

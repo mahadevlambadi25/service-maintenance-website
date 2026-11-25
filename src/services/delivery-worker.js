@@ -1,3 +1,4 @@
+import { waitUntil } from '@vercel/functions';
 import { ENV, STORAGE_PATHS } from '../config.js';
 import { generateUuid } from '../lib/crypto.js';
 import { deliverInquiryToFreshsales } from './crm-adapter.js';
@@ -203,13 +204,33 @@ export async function runMaintenanceTasksIfDue(db, storagePaths = STORAGE_PATHS,
   return { backupResult, retentionResult };
 }
 
+export async function runScheduledWorkerTick(db, storagePaths = STORAGE_PATHS, { runMaintenance = true } = {}) {
+  const schedule = await runScheduleEvaluation(db, new Date());
+  const queues = await processDeliveryQueues(db, new Date());
+  let maintenance = null;
+  if (runMaintenance) {
+    maintenance = await runMaintenanceTasksIfDue(db, storagePaths, new Date());
+  }
+  return { schedule, queues, maintenance };
+}
+
+export function scheduleBackgroundWork(promise) {
+  const safePromise = Promise.resolve(promise).catch((err) => {
+    console.error('[worker] background task error:', err?.message || err);
+  });
+  try {
+    if (process.env.VERCEL === '1') {
+      waitUntil(safePromise);
+    }
+  } catch {}
+  return safePromise;
+}
+
 export function startBackgroundWorker(db, intervalMs = 10_000, storagePaths = STORAGE_PATHS) {
   if (workerTimer) return;
   const tick = async () => {
     try {
-      await runScheduleEvaluation(db, new Date());
-      await processDeliveryQueues(db, new Date());
-      await runMaintenanceTasksIfDue(db, storagePaths, new Date());
+      await runScheduledWorkerTick(db, storagePaths, { runMaintenance: true });
     } catch (err) {
       console.error('[worker] tick error:', err.message);
     }

@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { ENV, ROLES, STORAGE_PATHS, UPLOAD_LIMITS } from '../config.js';
 import { generateTotpSecret, generateUuid, hashPassword } from '../lib/crypto.js';
@@ -21,6 +20,7 @@ import { recordAnalyticsEvent } from '../services/analytics.js';
 import { createFullBackup, restoreFromBackup, verifyBackupIntegrity } from '../services/backup-service.js';
 import { setCrmFaultMode, syncDealMilestoneToFreshsales } from '../services/crm-adapter.js';
 import { processDeliveryQueues } from '../services/delivery-worker.js';
+import { createObjectStore } from '../services/object-store.js';
 import { approveRetentionPolicy, runRetentionSweep } from '../services/retention-service.js';
 
 function sendJson(res, status, data) {
@@ -61,14 +61,19 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
       res.end('Not found');
       return true;
     }
-    const filePath = path.join(storagePaths.publicMedia, asset.public_derivative_key);
-    if (!fs.existsSync(filePath)) {
+    const store = createObjectStore(storagePaths);
+    const mediaBuf = await store.getObjectBuffer({ area: 'publicMedia', key: asset.public_derivative_key });
+    if (!mediaBuf) {
       res.writeHead(404);
       res.end('Not found');
       return true;
     }
-    res.writeHead(200, { 'Content-Type': asset.derivative_mime || 'image/jpeg', 'Cache-Control': 'no-store' });
-    fs.createReadStream(filePath).pipe(res);
+    res.writeHead(200, {
+      'Content-Type': asset.derivative_mime || 'image/jpeg',
+      'Content-Length': mediaBuf.length,
+      'Cache-Control': 'no-store',
+    });
+    res.end(mediaBuf);
     return true;
   }
 
@@ -183,9 +188,9 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
       sendJson(res, 403, { ok: false, message: 'Attachment unavailable or quarantined.' });
       return true;
     }
-    const baseDir = path.resolve(storagePaths.quarantine);
-    const filePath = path.resolve(baseDir, path.basename(att.storage_key));
-    if (!filePath.startsWith(baseDir) || !fs.existsSync(filePath)) {
+    const store = createObjectStore(storagePaths);
+    const attBuf = await store.getObjectBuffer({ area: 'quarantine', key: path.basename(att.storage_key) });
+    if (!attBuf) {
       sendJson(res, 404, { ok: false, message: 'Attachment file missing from private storage.' });
       return true;
     }
@@ -196,12 +201,13 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
     const safeFileName = att.original_name.replace(/["\r\n]/g, '');
     res.writeHead(200, {
       'Content-Type': att.mime_type,
+      'Content-Length': attBuf.length,
       'Content-Disposition': `${inlineMode ? 'inline' : 'attachment'}; filename="${safeFileName}"`,
       'X-Content-Type-Options': 'nosniff',
       'Cache-Control': 'no-store',
       ...(inlineMode ? { 'Content-Security-Policy': "sandbox" } : {}),
     });
-    fs.createReadStream(filePath).pipe(res);
+    res.end(attBuf);
     return true;
   }
 
@@ -223,8 +229,9 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
       sendJson(res, 403, { ok: false, message: 'Attachment unavailable or quarantined.' });
       return true;
     }
-    const filePath = path.join(storagePaths.resumes, att.storage_key);
-    if (!fs.existsSync(filePath)) {
+    const store = createObjectStore(storagePaths);
+    const resumeBuf = await store.getObjectBuffer({ area: 'resumes', key: path.basename(att.storage_key) });
+    if (!resumeBuf) {
       res.writeHead(404);
       res.end('File missing');
       return true;
@@ -234,10 +241,11 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
     });
     res.writeHead(200, {
       'Content-Type': att.mime_type,
+      'Content-Length': resumeBuf.length,
       'Content-Disposition': `attachment; filename="${att.original_display_name.replace(/"/g, '')}"`,
       'Cache-Control': 'no-store',
     });
-    fs.createReadStream(filePath).pipe(res);
+    res.end(resumeBuf);
     return true;
   }
 
@@ -926,6 +934,112 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
   // ============================================================
   // 6. PROJECTS & AUTHENTICATED MEDIA PIPELINE
   // ============================================================
+  if (pathname === '/admin/api/media/presign') {
+    if (!hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
+      sendJson(res, 403, { ok: false, message: 'Forbidden' });
+      return true;
+    }
+    const items = Array.isArray(fields.files) ? fields.files : [];
+    if (items.length === 0 || items.length > UPLOAD_LIMITS.projectMedia.maxFiles) {
+      sendJson(res, 422, { ok: false, message: 'Select 1 to 20 image files.' });
+      return true;
+    }
+    const store = createObjectStore(storagePaths);
+    if (store.mode !== 's3') {
+      sendJson(res, 200, { ok: true, mode: 'direct_multipart', uploads: [] });
+      return true;
+    }
+    const uploads = [];
+    for (const item of items) {
+      const byteSize = Number(item.size || 0);
+      const mime = String(item.type || 'application/octet-stream').toLowerCase();
+      const origName = path.basename(String(item.name || 'image.jpg')).slice(0, 140);
+      if (byteSize <= 0 || byteSize > UPLOAD_LIMITS.projectMedia.maxFileBytes) {
+        sendJson(res, 422, { ok: false, message: `${origName}: exceeds 20 MB per-file limit.` });
+        return true;
+      }
+      if (!UPLOAD_LIMITS.projectMedia.allowedTypes.includes(mime)) {
+        sendJson(res, 422, { ok: false, message: `${origName}: allowed formats are JPEG, PNG, WebP, HEIC.` });
+        return true;
+      }
+      const stagingKey = `media/${session.user_id}/${generateUuid()}-${origName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+      const presigned = await store.createPresignedUpload({ key: stagingKey, contentType: mime, expiresIn: 600 });
+      uploads.push({ originalName: origName, ...presigned });
+    }
+    sendJson(res, 200, { ok: true, mode: 's3_presigned_put', uploads });
+    return true;
+  }
+
+  if (pathname === '/admin/api/media/finalize') {
+    if (!hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
+      sendJson(res, 403, { ok: false, message: 'Forbidden' });
+      return true;
+    }
+    const items = Array.isArray(fields.staged_files) ? fields.staged_files : [];
+    if (items.length === 0 || items.length > UPLOAD_LIMITS.projectMedia.maxFiles) {
+      sendJson(res, 422, { ok: false, message: 'Provide 1 to 20 staged media files.' });
+      return true;
+    }
+    const store = createObjectStore(storagePaths);
+    const accepted = [];
+    const rejected = [];
+    for (const item of items) {
+      const stagingKey = String(item.stagingKey || '');
+      const originalName = path.basename(String(item.originalName || 'upload')).slice(0, 140);
+      if (!stagingKey.startsWith(`media/${session.user_id}/`)) {
+        rejected.push({ name: originalName, code: 'invalid_staging_key', message: 'Invalid staged object reference.' });
+        continue;
+      }
+      try {
+        const buffer = await store.getObjectBuffer({ area: 'staging', key: stagingKey });
+        if (!buffer) {
+          rejected.push({ name: originalName, code: 'missing_staged_object', message: 'Uploaded object not found in staging.' });
+          continue;
+        }
+        const proc = await processProjectImageUploadAsync({ buffer, originalName, storagePaths });
+        if (!proc.ok) {
+          rejected.push({ name: originalName, code: proc.errorCode, message: proc.message });
+          continue;
+        }
+        const a = proc.asset;
+        await db.prepare(
+          `INSERT INTO media_assets (
+            asset_id, original_filename, mime_type, derivative_mime, byte_size, width, height, orientation,
+            alt_text, rights_owner, rights_status, private_original_key, public_derivative_key, variants_json,
+            sha256, scan_state, is_public_published, uploaded_by, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, 0, ?, ?)`
+        ).run(
+          a.asset_id,
+          a.original_filename,
+          a.mime_type,
+          a.derivative_mime,
+          a.byte_size,
+          a.width,
+          a.height,
+          a.orientation,
+          String(fields.alt_text || a.original_filename).slice(0, 200),
+          String(fields.rights_owner || 'Internal').slice(0, 120),
+          a.private_original_key,
+          a.public_derivative_key,
+          a.variants ? JSON.stringify(a.variants) : null,
+          a.sha256 || null,
+          a.scan_state || 'clean',
+          session.user_id,
+          nowIso
+        );
+        accepted.push(a);
+      } finally {
+        await store.deleteObject({ area: 'staging', key: stagingKey });
+      }
+    }
+    await recordAudit(db, session, 'media', 'batch_upload', 'media_asset', `${accepted.length}_files`, {
+      rejected_count: rejected.length,
+      transport: 's3_presigned_put',
+    });
+    sendJson(res, accepted.length > 0 ? 201 : 422, { ok: accepted.length > 0, accepted, rejected });
+    return true;
+  }
+
   if (pathname === '/admin/api/media/upload') {
     if (!hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
       sendJson(res, 403, { ok: false, message: 'Forbidden' });
@@ -1056,11 +1170,9 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
         }
       } catch {}
     }
+    const store = createObjectStore(storagePaths);
     for (const k of keysToRemove) {
-      const pubFile = path.join(storagePaths.publicMedia, path.basename(k));
-      if (fs.existsSync(pubFile)) {
-        try { fs.unlinkSync(pubFile); } catch {}
-      }
+      await store.deleteObject({ area: 'publicMedia', key: path.basename(k) });
     }
     await bumpPublicCache(db);
     await recordAudit(db, session, 'media', 'withdraw_rights', 'media_asset', asset.asset_id, {
@@ -1575,6 +1687,8 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
       allowedTypes: UPLOAD_LIMITS.resume.allowedTypes,
       maxBytes: UPLOAD_LIMITS.resume.maxFileBytes,
       destDir: storagePaths.resumes,
+      storagePaths,
+      area: 'resumes',
     });
     if (!resProc.ok) {
       sendJson(res, 422, { ok: false, message: resProc.message || 'Invalid resume file.' });
@@ -1602,10 +1716,8 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
       nowIso,
       oldAtt.attachment_id
     );
-    const oldPath = path.join(storagePaths.resumes, path.basename(oldAtt.storage_key));
-    if (fs.existsSync(oldPath)) {
-      try { fs.unlinkSync(oldPath); } catch {}
-    }
+    const store = createObjectStore(storagePaths);
+    await store.deleteObject({ area: 'resumes', key: path.basename(oldAtt.storage_key) });
     await recordAudit(db, session, 'hiring', 'replace_resume', 'application_attachment', newAttId, {
       application_id: appId,
       replaced_attachment_id: oldAtt.attachment_id,
@@ -1634,10 +1746,8 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
       return true;
     }
     (await db.prepare(`UPDATE application_attachments SET deleted_at = ? WHERE attachment_id = ?`).run(nowIso, oldAtt.attachment_id));
-    const oldPath = path.join(storagePaths.resumes, path.basename(oldAtt.storage_key));
-    if (fs.existsSync(oldPath)) {
-      try { fs.unlinkSync(oldPath); } catch {}
-    }
+    const store = createObjectStore(storagePaths);
+    await store.deleteObject({ area: 'resumes', key: path.basename(oldAtt.storage_key) });
     await recordAudit(db, session, 'hiring', 'delete_resume', 'application_attachment', oldAtt.attachment_id, {
       application_id: appId,
     });
@@ -2079,7 +2189,7 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
       sendJson(res, 404, { ok: false, message: 'Backup record not found.' });
       return true;
     }
-    const check = verifyBackupIntegrity(row.backup_dir);
+    const check = await verifyBackupIntegrity(row.backup_dir, storagePaths);
     await db.prepare(`UPDATE backup_runs SET status = ? WHERE backup_id = ?`).run(check.ok ? 'verified' : 'corrupted', row.backup_id);
     await recordAudit(db, session, 'ops', 'verify_backup', 'backup', row.backup_id, { ok: check.ok, error: check.error || null });
     sendJson(res, check.ok ? 200 : 422, { ok: check.ok, error: check.error || null, manifest: check.manifest || null });

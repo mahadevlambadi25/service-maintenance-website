@@ -1,0 +1,26 @@
+{
+  "name": "service-maintenance-web",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Service Maintenance (Promptitude Inc.) Commercial Property Services Website, Staff CMS Dashboard, Protected Recruiting, Seasonal Campaigns & Project Media Platform (PRD v2.0)",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "seed": "node src/db/seed.js",
+    "test": "node --test tests/unit.test.js tests/integration.test.js",
+    "test:unit": "node --test tests/unit.test.js",
+    "test:integration": "node --test tests/integration.test.js"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "@neon/config": "^1.14.7",
+    "@neon/env": "^2.1.10",
+    "heic-convert": "^2.1.0",
+    "pg": "^8.23.1",
+    "sharp": "^0.35.5"
+  }
+}

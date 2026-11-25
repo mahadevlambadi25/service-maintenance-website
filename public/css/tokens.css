@@ -1,0 +1,34 @@
+:root {
+  /* Architectural Brand Palette (PRD Section 07.02) */
+  --color-limestone: #F4F0E8;
+  --color-bone: #E4DCCE;
+  --color-carbon: #24251F;
+  --color-oxide: #6B3026;
+  --color-oxide-hover: #53231B;
+  --color-bronze: #9B815D; /* Decorative & borders only; never normal body text */
+  --color-muted-stone: #625F55;
+
+  /* Semantic Status Colors (distinct from brand colors, always paired with text/icons) */
+  --color-error: #A61B1B;
+  --color-error-bg: #FDF2F2;
+  --color-success: #1C5D2D;
+  --color-success-bg: #EEF7F0;
+  --color-warning: #7A4B00;
+  --color-warning-bg: #FFF8EB;
+
+  /* Typography */
+  --font-display: 'Tiempos Headline', Georgia, 'Times New Roman', serif;
+  --font-sans: 'Söhne', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  /* Layout & Spacing */
+  --container-max: 1240px;
+  --measure: 64ch;
+  --radius: 2px;
+  --gutter: clamp(1.25rem, 4vw, 3.5rem);
+  --section-space: clamp(3rem, 6vw, 6rem);
+
+  /* Motion */
+  --transition-fast: 180ms ease;
+
+  color-scheme: light;
+}

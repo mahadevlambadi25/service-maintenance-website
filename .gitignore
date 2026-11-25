@@ -1,0 +1,20 @@
+# Dependencies & Neon local link/env secrets
+node_modules/
+.neon
+.neon/
+.env
+.env.*
+!.env.example
+
+# Runtime storage (SQLite DBs, backups, resumes, private uploads, quarantine, generated media)
+storage/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Logs & OS files
+*.log
+.DS_Store
+Thumbs.db

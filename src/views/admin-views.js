@@ -468,7 +468,7 @@ export function renderAdminPagesView({
     </form>
   </section>
 
-  <div class="grid-2" style="align-items:start;">
+  <div class="admin-split">
     <section class="admin-card">
       <h2>Website Pages</h2>
       ${
@@ -633,7 +633,7 @@ export function renderAdminPagesView({
     }
   </div>
 
-  <div class="grid-2" style="align-items:start;">
+  <div class="admin-split">
     <section class="admin-card">
       <h2>Insights Articles</h2>
       <div class="table-scroll" tabindex="0" role="region" aria-label="Articles Table">
@@ -1050,7 +1050,7 @@ export function renderAdminProjectsView({ projects, selectedProject, pairs, gall
   }
 
   return `
-  <div class="grid-2" style="align-items:start;">
+  <div class="admin-split">
     <section class="admin-card">
       <h2>Completed Projects</h2>
       <div class="table-scroll" tabindex="0" role="region" aria-label="Completed Projects Table">
@@ -1447,7 +1447,7 @@ export function renderAdminJobsView({
     }
   </section>
 
-  <div class="grid-2" style="align-items:start;">
+  <div class="admin-split">
     <section class="admin-card">
       <h2>Protected Applicant Inbox</h2>
       <form method="GET" action="/admin/jobs" style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end;margin-bottom:1rem;">
@@ -1677,61 +1677,59 @@ export function renderAdminLeadsView({
     ${renderPaginationNav('/admin/leads', inquiriesMeta, filters)}
   </section>
 
-  <div class="grid-2">
-    <section class="admin-card">
-      <h2>Freshsales CRM Delivery Queue</h2>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="Freshsales CRM Delivery Queue">
-        <table class="data-table" style="font-size:0.84rem;">
-          <thead><tr><th>Inquiry</th><th>Status</th><th>Attempts</th><th>External ID / Error</th><th>Action</th></tr></thead>
-          <tbody>
-            ${crmQueue
-              .map(
-                (q) => `<tr>
-                  <td><code>${escapeHtml(q.inquiry_id.slice(0, 8))}</code></td>
-                  <td><span class="badge ${q.status === 'delivered' ? 'badge--live' : q.status === 'failed_review' ? 'badge--err' : 'badge--warn'}">${escapeHtml(q.status)}</span></td>
-                  <td>${escapeHtml(q.attempts)}</td>
-                  <td>${escapeHtml(q.external_record_id || q.last_error || 'Pending')}</td>
-                  <td>${
-                    q.status === 'failed_review' || q.status === 'pending'
-                      ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.2rem 0.55rem;font-size:0.78rem;" data-url="/admin/api/crm/replay/${escapeHtml(q.delivery_id)}">Replay</button>`
-                      : '—'
-                  }</td>
-                </tr>`
-              )
-              .join('')}
-          </tbody>
-        </table>
-      </div>
-    </section>
+  <section class="admin-card">
+    <h2>Freshsales CRM Delivery Queue</h2>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Freshsales CRM Delivery Queue">
+      <table class="data-table" style="font-size:0.84rem;">
+        <thead><tr><th>Inquiry</th><th>Status</th><th>Attempts</th><th>External ID / Error</th><th>Action</th></tr></thead>
+        <tbody>
+          ${crmQueue
+            .map(
+              (q) => `<tr>
+                <td><code>${escapeHtml(q.inquiry_id.slice(0, 8))}</code></td>
+                <td><span class="badge ${q.status === 'delivered' ? 'badge--live' : q.status === 'failed_review' ? 'badge--err' : 'badge--warn'}">${escapeHtml(q.status)}</span></td>
+                <td>${escapeHtml(q.attempts)}</td>
+                <td>${escapeHtml(q.external_record_id || q.last_error || 'Pending')}</td>
+                <td>${
+                  q.status === 'failed_review' || q.status === 'pending'
+                    ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.2rem 0.55rem;font-size:0.78rem;" data-url="/admin/api/crm/replay/${escapeHtml(q.delivery_id)}">Replay</button>`
+                    : '—'
+                }</td>
+              </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </div>
+  </section>
 
-    <section class="admin-card">
-      <h2>M365 Notification Dispatch Queue</h2>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="M365 Notification Dispatch Queue">
-        <table class="data-table" style="font-size:0.84rem;">
-          <thead><tr><th>Domain</th><th>Recipient</th><th>Subject</th><th>Status</th><th>Attempts</th><th>Provider ID / Error</th><th>Action</th></tr></thead>
-          <tbody>
-            ${notifications
-              .map(
-                (n) => `<tr>
-                  <td>${escapeHtml(n.domain)}</td>
-                  <td>${escapeHtml(n.recipient_target)}</td>
-                  <td>${escapeHtml(n.subject)}</td>
-                  <td><span class="badge ${n.status === 'sent' ? 'badge--live' : n.status === 'failed_review' ? 'badge--err' : 'badge--warn'}">${escapeHtml(n.status)}</span></td>
-                  <td>${escapeHtml(n.attempts)}</td>
-                  <td>${escapeHtml(n.provider_message_id || n.last_error || 'Pending')}</td>
-                  <td>${
-                    n.status !== 'sent'
-                      ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.2rem 0.55rem;font-size:0.78rem;" data-url="/admin/api/notifications/replay/${escapeHtml(n.notification_id)}">Replay</button>`
-                      : '—'
-                  }</td>
-                </tr>`
-              )
-              .join('')}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  </div>`;
+  <section class="admin-card">
+    <h2>M365 Notification Dispatch Queue</h2>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="M365 Notification Dispatch Queue">
+      <table class="data-table" style="font-size:0.84rem;">
+        <thead><tr><th>Domain</th><th>Recipient</th><th>Subject</th><th>Status</th><th>Attempts</th><th>Provider ID / Error</th><th>Action</th></tr></thead>
+        <tbody>
+          ${notifications
+            .map(
+              (n) => `<tr>
+                <td>${escapeHtml(n.domain)}</td>
+                <td>${escapeHtml(n.recipient_target)}</td>
+                <td>${escapeHtml(n.subject)}</td>
+                <td><span class="badge ${n.status === 'sent' ? 'badge--live' : n.status === 'failed_review' ? 'badge--err' : 'badge--warn'}">${escapeHtml(n.status)}</span></td>
+                <td>${escapeHtml(n.attempts)}</td>
+                <td>${escapeHtml(n.provider_message_id || n.last_error || 'Pending')}</td>
+                <td>${
+                  n.status !== 'sent'
+                    ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.2rem 0.55rem;font-size:0.78rem;" data-url="/admin/api/notifications/replay/${escapeHtml(n.notification_id)}">Replay</button>`
+                    : '—'
+                }</td>
+              </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </div>
+  </section>`;
 }
 
 export function renderAdminAnalyticsView({ summary }) {
@@ -1741,29 +1739,29 @@ export function renderAdminAnalyticsView({ summary }) {
   const projReady = summary.projectReadiness || [];
 
   return `
-  <p class="muted"><strong>Data Integrity Boundary:</strong> Reports non-identifying first-party events and durable inquiry totals only. Applicant names, emails, telephones, and resume filenames are never present here. Snapshot reflects stored database records as of page load.</p>
-  <div class="grid-2">
-    <section class="admin-card">
-      <h2>Durable Inquiries by Service Family (Commercial Funnel)</h2>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="Durable Inquiries Summary">
-        <table class="data-table" style="font-size:0.85rem;">
-          <thead><tr><th>Service Family</th><th>Total</th><th>New Biz</th><th>Qualified</th><th>Proposals</th><th>Won</th><th>Existing / Excluded</th></tr></thead>
-          <tbody>
-            ${
-              leads.length === 0
-                ? '<tr><td colspan="7" class="muted">No commercial inquiries recorded yet.</td></tr>'
-                : leads
-                    .map(
-                      (r) =>
-                        `<tr><td>${escapeHtml(r.service_family)}</td><td>${escapeHtml(r.total_inquiries)}</td><td>${escapeHtml(r.accepted_new_business)}</td><td>${escapeHtml(r.qualified_opportunities)}</td><td>${escapeHtml(r.proposals_sent)}</td><td>${escapeHtml(r.closed_won)}</td><td>${escapeHtml(r.existing_service_requests)} / ${escapeHtml(r.excluded_non_sales)}</td></tr>`
-                    )
-                    .join('')
-            }
-          </tbody>
-        </table>
-      </div>
-    </section>
+  <p class="muted" style="margin-bottom:1.15rem;"><strong>Data Integrity Boundary:</strong> Reports non-identifying first-party events and durable inquiry totals only. Applicant names, emails, telephones, and resume filenames are never present here. Snapshot reflects stored database records as of page load.</p>
+  <section class="admin-card">
+    <h2>Durable Inquiries by Service Family (Commercial Funnel)</h2>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Durable Inquiries Summary">
+      <table class="data-table" style="font-size:0.86rem;">
+        <thead><tr><th>Service Family</th><th>Total</th><th>New Biz</th><th>Qualified</th><th>Proposals</th><th>Won</th><th>Existing / Excluded</th></tr></thead>
+        <tbody>
+          ${
+            leads.length === 0
+              ? '<tr><td colspan="7" class="muted">No commercial inquiries recorded yet.</td></tr>'
+              : leads
+                  .map(
+                    (r) =>
+                      `<tr><td>${escapeHtml(r.service_family)}</td><td>${escapeHtml(r.total_inquiries)}</td><td>${escapeHtml(r.accepted_new_business)}</td><td>${escapeHtml(r.qualified_opportunities)}</td><td>${escapeHtml(r.proposals_sent)}</td><td>${escapeHtml(r.closed_won)}</td><td>${escapeHtml(r.existing_service_requests)} / ${escapeHtml(r.excluded_non_sales)}</td></tr>`
+                  )
+                  .join('')
+          }
+        </tbody>
+      </table>
+    </div>
+  </section>
 
+  <div class="grid-2" style="align-items:start;">
     <section class="admin-card">
       <h2>First-Party Event Totals (PII-Scrubbed)</h2>
       <div class="table-scroll" tabindex="0" role="region" aria-label="First-Party Event Totals">
@@ -1775,24 +1773,6 @@ export function renderAdminAnalyticsView({ summary }) {
                 ? '<tr><td colspan="2" class="muted">No analytics events recorded yet.</td></tr>'
                 : events.map((e) => `<tr><td><code>${escapeHtml(e.event_name)}</code></td><td>${escapeHtml(e.total)}</td></tr>`).join('')
             }
-          </tbody>
-        </table>
-      </div>
-    </section>
-  </div>
-
-  <div class="grid-2">
-    <section class="admin-card">
-      <h2>On-Site Seasonal Campaign Placement Performance</h2>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="Campaign Placement Performance">
-        <table class="data-table" style="font-size:0.85rem;">
-          <thead><tr><th>Campaign</th><th>Slot</th><th>State</th><th>Views (50% &ge; 1s)</th><th>CTA Clicks</th></tr></thead>
-          <tbody>
-            ${camps
-              .map(
-                (c) => `<tr><td>${escapeHtml(c.internal_title)}</td><td><code>${escapeHtml(c.placement_slot)}</code></td><td>${escapeHtml(c.activation_state)}</td><td>${escapeHtml(c.views)}</td><td>${escapeHtml(c.clicks)}</td></tr>`
-              )
-              .join('')}
           </tbody>
         </table>
       </div>
@@ -1813,7 +1793,23 @@ export function renderAdminAnalyticsView({ summary }) {
         </table>
       </div>
     </section>
-  </div>`;
+  </div>
+
+  <section class="admin-card">
+    <h2>On-Site Seasonal Campaign Placement Performance</h2>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Campaign Placement Performance">
+      <table class="data-table" style="font-size:0.85rem;">
+        <thead><tr><th>Campaign</th><th>Slot</th><th>State</th><th>Views (50% &ge; 1s)</th><th>CTA Clicks</th></tr></thead>
+        <tbody>
+          ${camps
+            .map(
+              (c) => `<tr><td>${escapeHtml(c.internal_title)}</td><td><code>${escapeHtml(c.placement_slot)}</code></td><td>${escapeHtml(c.activation_state)}</td><td>${escapeHtml(c.views)}</td><td>${escapeHtml(c.clicks)}</td></tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </div>
+  </section>`;
 }
 
 export function renderAdminSettingsView({
@@ -1832,85 +1828,103 @@ export function renderAdminSettingsView({
   const allRoleNames = Object.values(ROLES);
 
   return `
-  <div class="grid-2" style="align-items:start;">
-    ${
-      canManageSettings
-        ? `<section class="admin-card">
-            <h2>Canonical Business Settings</h2>
-            <form method="POST" action="/admin/api/settings" class="js-ajax-form">
-              <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
-              <div class="field"><label for="bs-trading">Trading Name</label><input id="bs-trading" name="trading_name" value="${escapeHtml(settings.trading_name)}" required></div>
-              <div class="field"><label for="bs-legal">Legal Entity</label><input id="bs-legal" name="legal_entity" value="${escapeHtml(settings.legal_entity)}" required></div>
-              <div class="field"><label for="bs-phone">Phone Display</label><input id="bs-phone" name="phone_display" value="${escapeHtml(settings.phone_display)}" required></div>
-              <div class="field"><label for="bs-hours">Hours (America/Phoenix)</label><input id="bs-hours" name="hours_display" value="${escapeHtml(settings.hours_display)}" required></div>
-              <div class="field"><label for="bs-addr">Office Address Reference</label><input id="bs-addr" name="address_display" value="${escapeHtml(settings.address_display)}" required></div>
-              <div class="field"><label for="bs-roc">Arizona ROC Numbers</label><input id="bs-roc" name="roc_numbers" value="${escapeHtml(settings.roc_numbers)}" required></div>
-              <div class="field"><label for="bs-ins">Insurance Statement</label><input id="bs-ins" name="insurance_statement" value="${escapeHtml(settings.insurance_statement)}" required></div>
-              <button type="submit" class="btn btn--primary">Save Canonical Business Settings</button>
-            </form>
-          </section>`
-        : ''
-    }
-
-    <section class="admin-card">
-      <h2>Staff Accounts, Roles &amp; Session Controls</h2>
-      <p class="muted" style="font-size:0.84rem;">Deactivating a staff user or changing their role immediately revokes all active sessions server-side. <a href="/admin/mfa-setup">Manage or rotate your own Google Authenticator &rarr;</a></p>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="Staff Accounts Table">
-        <table class="data-table" style="font-size:0.84rem;">
-          <thead><tr><th>Staff Member</th><th>Role &amp; Extra Roles</th><th>MFA / Sessions</th><th>Status &amp; Actions</th></tr></thead>
-          <tbody>
-            ${users
-              .map((u) => {
-                let extra = [];
-                try { extra = JSON.parse(u.extra_roles_json || '[]'); } catch {}
-                const sessCount = activeSessionsMap[u.user_id] || 0;
-                return `<tr>
-                  <td><strong>${escapeHtml(u.full_name)}</strong><br><small>${escapeHtml(u.email)}</small></td>
-                  <td>
-                    ${
-                      canManageUsers
-                        ? `<form method="POST" action="/admin/api/users/${escapeHtml(u.user_id)}" class="js-ajax-form" style="display:flex;flex-direction:column;gap:0.35rem;">
-                            <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
-                            <select name="role" aria-label="Primary role for ${escapeHtml(u.email)}" style="font-size:0.8rem;min-height:34px;">
+  <section class="admin-card">
+    <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.75rem;margin-bottom:0.85rem;">
+      <div>
+        <h2 style="border:0;padding:0;margin:0 0 0.25rem;">Staff Accounts, Roles &amp; Session Controls</h2>
+        <p class="muted" style="font-size:0.86rem;margin:0;">Deactivating a staff user or changing their role immediately revokes all active sessions server-side.</p>
+      </div>
+      <a href="/admin/mfa-setup" class="btn btn--secondary" style="min-height:38px;padding:0.4rem 0.9rem;font-size:0.84rem;">Manage / Rotate My MFA &rarr;</a>
+    </div>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Staff Accounts Table">
+      <table class="data-table" style="font-size:0.86rem;">
+        <thead><tr><th>Staff Member</th><th>Role &amp; Extra Roles</th><th>MFA / Sessions</th><th>Status &amp; Actions</th></tr></thead>
+        <tbody>
+          ${users
+            .map((u) => {
+              let extra = [];
+              try { extra = JSON.parse(u.extra_roles_json || '[]'); } catch {}
+              const sessCount = activeSessionsMap[u.user_id] || 0;
+              return `<tr>
+                <td style="min-width:190px;"><strong>${escapeHtml(u.full_name)}</strong><br><small class="muted">${escapeHtml(u.email)}</small></td>
+                <td style="min-width:250px;">
+                  ${
+                    canManageUsers
+                      ? `<form method="POST" action="/admin/api/users/${escapeHtml(u.user_id)}" class="js-ajax-form" style="display:flex;flex-direction:column;gap:0.4rem;">
+                          <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+                          <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+                            <select name="role" aria-label="Primary role for ${escapeHtml(u.email)}" style="flex:1;min-width:165px;">
                               ${allRoleNames.map((r) => `<option value="${escapeHtml(r)}"${u.role === r ? ' selected' : ''}>${escapeHtml(r)}</option>`).join('')}
                             </select>
-                            <input type="text" name="extra_roles" value="${escapeHtml(extra.join(', '))}" aria-label="Extra roles comma-separated" placeholder="Extra roles (comma-sep)" style="font-size:0.78rem;min-height:32px;">
-                            <button type="submit" class="btn btn--secondary" style="min-height:32px;padding:0.2rem 0.5rem;font-size:0.76rem;">Save Role</button>
-                          </form>`
-                        : `${escapeHtml(u.role)}${extra.length ? `<br><small class="muted">+ ${escapeHtml(extra.join(', '))}</small>` : ''}`
-                    }
-                  </td>
-                  <td>${u.mfa_enabled ? (u.mfa_enrolled ? 'Enrolled (TOTP)' : 'Setup Pending (TOTP)') : 'Off'}<br><small class="muted">${sessCount} active session(s)</small></td>
-                  <td>
+                            <button type="submit" class="btn btn--secondary" style="min-height:36px;padding:0.25rem 0.7rem;font-size:0.8rem;">Save Role</button>
+                          </div>
+                          <input type="text" name="extra_roles" value="${escapeHtml(extra.join(', '))}" aria-label="Extra roles comma-separated" placeholder="Extra roles (comma-separated)">
+                        </form>`
+                      : `${escapeHtml(u.role)}${extra.length ? `<br><small class="muted">+ ${escapeHtml(extra.join(', '))}</small>` : ''}`
+                  }
+                </td>
+                <td style="min-width:165px;">
+                  <span class="badge ${u.mfa_enabled && u.mfa_enrolled ? 'badge--live' : 'badge--warn'}">${u.mfa_enabled ? (u.mfa_enrolled ? 'Enrolled (TOTP)' : 'Setup Pending (TOTP)') : 'Off'}</span>
+                  <div class="muted" style="font-size:0.8rem;margin-top:0.35rem;">${sessCount} active session(s)</div>
+                </td>
+                <td style="min-width:265px;">
+                  <div class="admin-action-group">
                     <span class="badge ${u.active ? 'badge--live' : 'badge--err'}">${u.active ? 'Active' : 'Revoked'}</span>
                     ${
                       canManageUsers
-                        ? `<div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.4rem;">
-                            <button type="button" class="btn btn--secondary js-action-btn" style="min-height:32px;padding:0.2rem 0.5rem;font-size:0.75rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/mfa-recovery-token">Issue MFA Setup Link</button>
-                            <button type="button" class="btn btn--secondary js-action-btn" style="min-height:32px;padding:0.2rem 0.5rem;font-size:0.75rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/revoke-sessions">Revoke Sessions</button>
-                            ${
-                              u.active
-                                ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:32px;padding:0.2rem 0.5rem;font-size:0.75rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/deactivate">Deactivate</button>`
-                                : `<button type="button" class="btn btn--primary js-action-btn" style="min-height:32px;padding:0.2rem 0.5rem;font-size:0.75rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/activate">Activate</button>`
-                            }
-                          </div>`
+                        ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.25rem 0.65rem;font-size:0.78rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/mfa-recovery-token">Issue MFA Setup Link</button>
+                           <button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.25rem 0.65rem;font-size:0.78rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/revoke-sessions">Revoke Sessions</button>
+                           ${
+                             u.active
+                               ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.25rem 0.65rem;font-size:0.78rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/deactivate">Deactivate</button>`
+                               : `<button type="button" class="btn btn--primary js-action-btn" style="min-height:34px;padding:0.25rem 0.65rem;font-size:0.78rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/activate">Activate</button>`
+                           }`
                         : ''
                     }
-                  </td>
-                </tr>`;
-              })
-              .join('')}
-          </tbody>
-        </table>
-      </div>
+                  </div>
+                </td>
+              </tr>`;
+            })
+            .join('')}
+        </tbody>
+      </table>
+    </div>
+  </section>
 
-      ${
-        canManageUsers
-          ? `<form method="POST" action="/admin/api/users" class="js-ajax-form" style="margin-top:1.25rem;">
+  ${
+    canManageSettings
+      ? `<section class="admin-card">
+          <h2>Canonical Business Settings</h2>
+          <form method="POST" action="/admin/api/settings" class="js-ajax-form">
+            <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+            <div class="grid-2">
+              <div class="field"><label for="bs-trading">Trading Name</label><input type="text" id="bs-trading" name="trading_name" value="${escapeHtml(settings.trading_name)}" required></div>
+              <div class="field"><label for="bs-legal">Legal Entity</label><input type="text" id="bs-legal" name="legal_entity" value="${escapeHtml(settings.legal_entity)}" required></div>
+            </div>
+            <div class="grid-2">
+              <div class="field"><label for="bs-phone">Phone Display</label><input type="text" id="bs-phone" name="phone_display" value="${escapeHtml(settings.phone_display)}" required></div>
+              <div class="field"><label for="bs-hours">Hours (America/Phoenix)</label><input type="text" id="bs-hours" name="hours_display" value="${escapeHtml(settings.hours_display)}" required></div>
+            </div>
+            <div class="grid-2">
+              <div class="field"><label for="bs-addr">Office Address Reference</label><input type="text" id="bs-addr" name="address_display" value="${escapeHtml(settings.address_display)}" required></div>
+              <div class="field"><label for="bs-roc">Arizona ROC Numbers</label><input type="text" id="bs-roc" name="roc_numbers" value="${escapeHtml(settings.roc_numbers)}" required></div>
+            </div>
+            <div class="field"><label for="bs-ins">Insurance Statement</label><input type="text" id="bs-ins" name="insurance_statement" value="${escapeHtml(settings.insurance_statement)}" required></div>
+            <button type="submit" class="btn btn--primary">Save Canonical Business Settings</button>
+          </form>
+        </section>`
+      : ''
+  }
+
+  <div class="grid-2" style="align-items:start;">
+    ${
+      canManageUsers
+        ? `<section class="admin-card">
+            <h2>Create Staff Account</h2>
+            <form method="POST" action="/admin/api/users" class="js-ajax-form">
               <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
-              <h3 style="margin:0 0 0.6rem;">Create Staff Account</h3>
               <div class="grid-2">
-                <div class="field"><label for="nu-name">Full Name</label><input id="nu-name" name="full_name" required></div>
+                <div class="field"><label for="nu-name">Full Name</label><input type="text" id="nu-name" name="full_name" required></div>
                 <div class="field"><label for="nu-email">Staff Email</label><input type="email" id="nu-email" name="email" required></div>
               </div>
               <div class="grid-2">
@@ -1919,50 +1933,54 @@ export function renderAdminSettingsView({
                     ${allRoleNames.map((r) => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('')}
                   </select>
                 </div>
-                <div class="field"><label for="nu-extra">Additional Roles (comma-separated, optional)</label><input id="nu-extra" name="extra_roles" placeholder="e.g. Analyst"></div>
+                <div class="field"><label for="nu-extra">Additional Roles (comma-separated, optional)</label><input type="text" id="nu-extra" name="extra_roles" placeholder="e.g. Analyst"></div>
               </div>
               <div class="field"><label for="nu-pass">Initial Password (min 10 chars)</label><input type="password" id="nu-pass" name="password" minlength="10" required></div>
               <button type="submit" class="btn btn--primary">Create Staff Account</button>
-            </form>`
-          : ''
-      }
+            </form>
+          </section>`
+        : ''
+    }
 
-      ${
-        canManageBackups
-          ? `<h3 style="margin-top:1.5rem;">Company-Owned Backup &amp; Export (OPS-01 / OPS-03)</h3>
-             <p class="muted" style="font-size:0.85rem;">Generates a portable JSON snapshot plus checksummed full SQLite + private storage backups with integrity verification and re-evaluated restore.</p>
-             <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.85rem;">
-               <a href="/admin/api/backup/export.json" class="btn btn--secondary">Download Portable JSON Export</a>
-               <button type="button" class="btn btn--primary js-action-btn" data-url="/admin/api/backups/create">Create Verified Full Backup Now</button>
-             </div>
-             ${
-               backupRuns.length > 0
-                 ? `<div class="table-scroll" tabindex="0" role="region" aria-label="Full Backup Runs">
-                      <table class="data-table" style="font-size:0.8rem;">
-                        <thead><tr><th>Backup ID / Reason</th><th>Created (Phoenix)</th><th>Files</th><th>Status</th><th>Actions</th></tr></thead>
-                        <tbody>
-                          ${backupRuns
-                            .map(
-                              (b) => `<tr>
-                                <td><code>${escapeHtml(b.backup_id.slice(0, 8))}</code> (${escapeHtml(b.reason)})</td>
-                                <td>${escapeHtml(formatPhoenixDateTime(b.created_at, false))}</td>
-                                <td>${escapeHtml(b.file_count)}</td>
-                                <td><span class="badge ${b.status === 'verified' ? 'badge--live' : b.status === 'corrupted' ? 'badge--err' : 'badge--warn'}">${escapeHtml(b.status)}</span></td>
-                                <td style="display:flex;gap:0.3rem;flex-wrap:wrap;">
-                                  <button type="button" class="btn btn--secondary js-action-btn" style="min-height:32px;padding:0.2rem 0.5rem;font-size:0.75rem;" data-url="/admin/api/backups/${escapeHtml(b.backup_id)}/verify">Verify SHA-256</button>
-                                  <button type="button" class="btn btn--secondary js-action-btn" style="min-height:32px;padding:0.2rem 0.5rem;font-size:0.75rem;" data-url="/admin/api/backups/${escapeHtml(b.backup_id)}/restore">Restore</button>
-                                </td>
-                              </tr>`
-                            )
-                            .join('')}
-                        </tbody>
-                      </table>
-                    </div>`
-                 : '<p class="muted" style="font-size:0.84rem;">No full filesystem backups recorded yet.</p>'
-             }`
-          : ''
-      }
-    </section>
+    ${
+      canManageBackups
+        ? `<section class="admin-card">
+            <h2>Company-Owned Backup &amp; Export (OPS-01 / OPS-03)</h2>
+            <p class="muted" style="font-size:0.86rem;">Generates a portable JSON snapshot plus checksummed full backups with SHA-256 verification and re-evaluated restore.</p>
+            <div class="admin-action-group" style="margin-bottom:1rem;">
+              <a href="/admin/api/backup/export.json" class="btn btn--secondary">Download Portable JSON Export</a>
+              <button type="button" class="btn btn--primary js-action-btn" data-url="/admin/api/backups/create">Create Verified Full Backup Now</button>
+            </div>
+            ${
+              backupRuns.length > 0
+                ? `<div class="table-scroll" tabindex="0" role="region" aria-label="Full Backup Runs">
+                     <table class="data-table" style="font-size:0.82rem;">
+                       <thead><tr><th>Backup ID / Reason</th><th>Created (Phoenix)</th><th>Files</th><th>Status</th><th>Actions</th></tr></thead>
+                       <tbody>
+                         ${backupRuns
+                           .map(
+                             (b) => `<tr>
+                               <td><code>${escapeHtml(b.backup_id.slice(0, 8))}</code> (${escapeHtml(b.reason)})</td>
+                               <td>${escapeHtml(formatPhoenixDateTime(b.created_at, false))}</td>
+                               <td>${escapeHtml(b.file_count)}</td>
+                               <td><span class="badge ${b.status === 'verified' ? 'badge--live' : b.status === 'corrupted' ? 'badge--err' : 'badge--warn'}">${escapeHtml(b.status)}</span></td>
+                               <td>
+                                 <div class="admin-action-group">
+                                   <button type="button" class="btn btn--secondary js-action-btn" style="min-height:32px;padding:0.2rem 0.55rem;font-size:0.76rem;" data-url="/admin/api/backups/${escapeHtml(b.backup_id)}/verify">Verify SHA-256</button>
+                                   <button type="button" class="btn btn--secondary js-action-btn" style="min-height:32px;padding:0.2rem 0.55rem;font-size:0.76rem;" data-url="/admin/api/backups/${escapeHtml(b.backup_id)}/restore">Restore</button>
+                                 </div>
+                               </td>
+                             </tr>`
+                           )
+                           .join('')}
+                       </tbody>
+                     </table>
+                   </div>`
+                : '<p class="muted" style="font-size:0.84rem;">No full filesystem backups recorded yet.</p>'
+            }
+          </section>`
+        : ''
+    }
   </div>
 
   ${

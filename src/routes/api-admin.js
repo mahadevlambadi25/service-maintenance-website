@@ -254,10 +254,13 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
     await recordAudit(db, session, 'hiring', 'download_resume', 'application_attachment', att.attachment_id, {
       application_id: app.application_id,
     });
+    const safeResumeName = String(att.original_display_name || 'resume.bin').replace(/["\r\n\\/;]/g, '_');
     res.writeHead(200, {
       'Content-Type': att.mime_type,
       'Content-Length': resumeBuf.length,
-      'Content-Disposition': `attachment; filename="${att.original_display_name.replace(/"/g, '')}"`,
+      'Content-Disposition': `attachment; filename="${safeResumeName}"`,
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
       'Cache-Control': 'no-store',
     });
     res.end(resumeBuf);

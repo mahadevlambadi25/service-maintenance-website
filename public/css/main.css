@@ -413,6 +413,27 @@ a:hover {
   color: var(--color-muted-stone);
 }
 
+@media (max-width: 420px) {
+  .site-header__inner {
+    gap: 0.5rem;
+  }
+  .brand-lockup {
+    min-width: 0;
+    flex-shrink: 1;
+    gap: 0.5rem;
+  }
+  .brand-lockup__text {
+    min-width: 0;
+  }
+  .brand-lockup__name {
+    font-size: 1.02rem;
+  }
+  .brand-lockup__sub {
+    font-size: 0.62rem;
+    letter-spacing: 0.04em;
+  }
+}
+
 .nav-toggle {
   display: inline-flex;
   align-items: center;

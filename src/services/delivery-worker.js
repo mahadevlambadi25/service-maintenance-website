@@ -6,6 +6,7 @@ import { runScheduleEvaluation } from './campaign-engine.js';
 import { recordAudit } from './auth.js';
 import { sendEmailViaMicrosoftGraph } from './mailer.js';
 import { createFullBackup } from './backup-service.js';
+import { createObjectStore } from './object-store.js';
 import { runRetentionSweep } from './retention-service.js';
 
 let notificationFaultMode = false;
@@ -201,7 +202,14 @@ export async function runMaintenanceTasksIfDue(db, storagePaths = STORAGE_PATHS,
   if (anyRetentionDue) {
     retentionResult = await runRetentionSweep(db, { storagePaths, actor: null, nowDate });
   }
-  return { backupResult, retentionResult };
+
+  let stagingCleanup = null;
+  try {
+    const store = createObjectStore(storagePaths);
+    stagingCleanup = await store.cleanupStaleStagingObjects({ nowDate });
+  } catch {}
+
+  return { backupResult, retentionResult, stagingCleanup };
 }
 
 export async function runScheduledWorkerTick(db, storagePaths = STORAGE_PATHS, { runMaintenance = true } = {}) {

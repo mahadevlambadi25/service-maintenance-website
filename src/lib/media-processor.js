@@ -507,7 +507,9 @@ export async function processPrivateDocumentUploadAsync({
   const scan = await scanUploadedBuffer(buffer, { mime: sig.mime, originalName });
   const objectId = generateUuid();
   const storageKey = `${objectId}.bin`;
-  const resolvedArea = area || (destDir ? path.basename(destDir) : 'quarantine');
+  const requestedArea = area || (destDir ? path.basename(destDir) : 'quarantine');
+  // Never place non-clean/quarantined files inside the resumes area
+  const resolvedArea = scan.scanState !== 'clean' ? 'quarantine' : requestedArea;
   if (storagePaths || resolvedArea === 'quarantine' || resolvedArea === 'resumes') {
     const resolvedPaths = storagePaths || {
       resumes: resolvedArea === 'resumes' ? destDir : undefined,

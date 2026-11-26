@@ -178,12 +178,15 @@ export async function runScheduleEvaluation(db, nowDate = new Date()) {
       if (j.status === 'Scheduled' && j.publish_at && new Date(j.publish_at).getTime() <= nowMs) {
         if (j.close_at && new Date(j.close_at).getTime() <= nowMs) {
           await db.prepare(`UPDATE jobs SET status = 'Closed', updated_at = ? WHERE requisition_id = ?`).run(nowIso, j.requisition_id);
+          await recordAudit(db, null, 'hiring', 'job_auto_closed', 'job', j.requisition_id, { nowIso });
         } else {
           await db.prepare(`UPDATE jobs SET status = 'Open', updated_at = ? WHERE requisition_id = ?`).run(nowIso, j.requisition_id);
+          await recordAudit(db, null, 'hiring', 'job_auto_opened', 'job', j.requisition_id, { nowIso });
         }
         transitions++;
       } else if (j.status === 'Open' && j.close_at && new Date(j.close_at).getTime() <= nowMs) {
         await db.prepare(`UPDATE jobs SET status = 'Closed', updated_at = ? WHERE requisition_id = ?`).run(nowIso, j.requisition_id);
+        await recordAudit(db, null, 'hiring', 'job_auto_closed', 'job', j.requisition_id, { nowIso });
         transitions++;
       }
     }

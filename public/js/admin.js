@@ -476,6 +476,68 @@
     });
   });
 
+  const editUserForm = document.getElementById('edit-user-form');
+  if (editUserForm) {
+    editUserForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const fd = new FormData(editUserForm);
+      const origName = editUserForm.dataset.origName || '';
+      const origRole = editUserForm.dataset.origRole || '';
+      const origActive = editUserForm.dataset.origActive || '1';
+      let origExtra = [];
+      try {
+        origExtra = JSON.parse(editUserForm.dataset.origExtra || '[]');
+      } catch (_err) {
+        origExtra = [];
+      }
+
+      const nextName = String(fd.get('full_name') || '').trim();
+      const nextRole = String(fd.get('role') || '');
+      const nextActive = String(fd.get('active') || '');
+      const nextExtra = fd.getAll('extra_roles').map(String);
+      const hasNewPassword = Boolean(String(fd.get('new_password') || '').trim());
+
+      const origSet = new Set([origRole, ...origExtra].filter(Boolean));
+      const nextSet = new Set([nextRole, ...nextExtra].filter(Boolean));
+      const addedRoles = [...nextSet].filter((r) => !origSet.has(r));
+      const removedRoles = [...origSet].filter((r) => !nextSet.has(r));
+      const rolesChanged = addedRoles.length > 0 || removedRoles.length > 0 || nextRole !== origRole;
+      const statusChanged = nextActive !== origActive;
+      const sensitiveRoles = new Set(['Platform Administrator', 'Hiring Owner', 'Hiring Reviewer']);
+      const grantsSensitive = addedRoles.some((r) => sensitiveRoles.has(r)) || (nextRole !== origRole && sensitiveRoles.has(nextRole));
+
+      if (grantsSensitive) {
+        requestConfirmation(
+          {
+            title: 'Confirm Sensitive Privilege Grant',
+            message: `Granting elevated role access (${addedRoles.filter((r) => sensitiveRoles.has(r)).join(', ') || nextRole}) expands administrative or protected recruiting permissions and revokes active sessions immediately.`,
+            confirmLabel: 'Grant Elevated Access',
+          },
+          () => submitAjaxForm(editUserForm)
+        );
+        return;
+      }
+
+      if (rolesChanged || statusChanged || hasNewPassword) {
+        const changes = [];
+        if (rolesChanged) changes.push(`roles (${nextRole})`);
+        if (statusChanged) changes.push(nextActive === '1' ? 'account activation' : 'account deactivation');
+        if (hasNewPassword) changes.push('password reset');
+        requestConfirmation(
+          {
+            title: 'Confirm Account Access Update',
+            message: `Save ${changes.join(', ')} for ${nextName || origName || 'this user'}? Role or deactivation changes revoke active sessions immediately.`,
+            confirmLabel: 'Save Account Changes',
+          },
+          () => submitAjaxForm(editUserForm)
+        );
+        return;
+      }
+
+      submitAjaxForm(editUserForm);
+    });
+  }
+
   // 5. Multipart Forms (.js-multipart-form, e.g., Resume Replacement)
   document.querySelectorAll('.js-multipart-form').forEach((form) => {
     form.addEventListener('submit', async (e) => {

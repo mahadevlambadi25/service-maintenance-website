@@ -203,6 +203,7 @@ export function createObjectStore(storagePaths = STORAGE_PATHS) {
               keys.push({
                 key: item.Key.slice(areaPrefix.length),
                 bytes: Number(item.Size || 0),
+                lastModified: item.LastModified ? new Date(item.LastModified).toISOString() : null,
               });
             }
           }
@@ -224,7 +225,8 @@ export function createObjectStore(storagePaths = STORAGE_PATHS) {
             walk(full, rel);
           } else if (entry.isFile()) {
             if (!prefix || rel.startsWith(normalizeRelKey(prefix))) {
-              out.push({ key: rel, bytes: fs.statSync(full).size });
+              const st = fs.statSync(full);
+              out.push({ key: rel, bytes: st.size, lastModified: st.mtime ? st.mtime.toISOString() : null });
             }
           }
         }
@@ -257,6 +259,21 @@ export function createObjectStore(storagePaths = STORAGE_PATHS) {
         },
         expiresIn,
       };
+    },
+
+    async cleanupStaleStagingObjects({ maxAgeMs = 24 * 3600 * 1000, nowDate = new Date() } = {}) {
+      const cutoffMs = nowDate.getTime() - maxAgeMs;
+      const items = await this.listAreaObjects({ area: 'staging' });
+      let deleted = 0;
+      for (const item of items) {
+        if (!item.lastModified) continue;
+        const mtimeMs = new Date(item.lastModified).getTime();
+        if (Number.isFinite(mtimeMs) && mtimeMs < cutoffMs) {
+          await this.deleteObject({ area: 'staging', key: item.key });
+          deleted++;
+        }
+      }
+      return { scanned: items.length, deleted };
     },
   };
 }

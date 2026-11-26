@@ -612,6 +612,15 @@ export async function handlePublicRoute(req, res, db, urlObj, nonce, storagePath
         return true;
       }
 
+      if (camp.asset_id) {
+        const asset = await db
+          .prepare(`SELECT asset_id, public_derivative_key, alt_text, width, height, focal_x, focal_y, expiry_date FROM media_assets WHERE asset_id = ? AND rights_status = 'approved'`)
+          .get(camp.asset_id);
+        if (asset && (!asset.expiry_date || new Date(asset.expiry_date).getTime() > nowMs)) {
+          camp.asset = asset;
+        }
+      }
+
       sendHtml(
         res,
         200,

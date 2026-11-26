@@ -1,7 +1,15 @@
+import { ENV } from '../config.js';
+
 /**
  * Pure Node.js PDF 1.4 Generator for Service Maintenance's ungated Capabilities Statement (/credentials/capabilities.pdf).
  * Dynamically pulls verified data from canonical business_settings so it always stays in sync.
  */
+
+function sanitizePublicAddressForPdf(raw) {
+  return String(raw || '')
+    .replace(/\s*\(Confirm full ZIP[^)]*\)/gi, '')
+    .trim();
+}
 
 function escapePdfText(str) {
   return String(str || '')
@@ -66,9 +74,11 @@ export function generateCapabilitiesPdf(settings) {
   addBody(`Insurance: ${settings.insurance_statement}. Coverage includes general liability, umbrella, commercial auto, and workers compensation; certificates furnished upon request.`);
 
   addHeading('5. Monitored Company Contact');
+  const publicAddr = sanitizePublicAddressForPdf(settings.address_display);
+  const baseUrl = String(settings.website_url || ENV.BASE_URL || '').replace(/\/+$/, '');
   addBody(`Telephone: ${settings.phone_display} | Office Hours (${settings.timezone}): ${settings.hours_display}`);
-  addBody(`Office Reference: ${settings.address_display}`);
-  addBody(`Inquiries & Documentation Requests: ${settings.website_url}/credentials/ | ${settings.website_url}/request-proposal/`);
+  addBody(`Office Reference: ${publicAddr} (Greater Phoenix, AZ dispatch coverage)`);
+  addBody(`Inquiries & Documentation Requests: ${baseUrl}/credentials/ | ${baseUrl}/request-proposal/`);
 
   // Build PDF content stream
   let stream = 'BT\n';

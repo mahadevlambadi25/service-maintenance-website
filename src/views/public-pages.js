@@ -211,7 +211,7 @@ export function renderHomePage({ rev, settings, approvedProjects, seasonalFeatur
         <p><a href="/about/">Read our company story and core values</a></p>
       </div>
       <div class="panel panel--light">
-        <span class="eyebrow">7. Operating Practices &amp; 9. Procurement Proof</span>
+        <span class="eyebrow">Verified Credentials &amp; Operating Standards</span>
         <h3>Scope clarity &amp; verified licensing</h3>
         <ul>
           <li><strong>Legal entity:</strong> ${escapeHtml(settings.legal_entity)} dba ${escapeHtml(settings.trading_name)}</li>
@@ -642,9 +642,10 @@ export function renderAboutPage({ settings }) {
 
       <div class="grid-2" style="margin-top:2rem;">
         <div class="panel">
-          <h2>Proposed Mission &amp; Vision</h2>
-          <p><strong>Draft Mission:</strong> Help commercial owners and property teams maintain well-cared-for properties through dependable service, clear communication, and carefully managed work.</p>
-          <p style="margin-bottom:0;"><strong>Draft Vision:</strong> Build lasting relationships across Greater Phoenix as the commercial property partner clients turn to for ongoing care and improvement.</p>
+          <h2>Our Approach &amp; Operating Commitments</h2>
+          <p><em><!-- CLIENT APPROVAL REQUIRED: Final mission and vision wording is pending client review. The statements below reflect the operational approach currently in use and should be confirmed before publication. --></em></p>
+          <p>Service Maintenance helps commercial owners and property teams maintain well-cared-for properties through dependable service, clear communication, and carefully managed work.</p>
+          <p style="margin-bottom:0;">Our team builds lasting relationships across Greater Phoenix as the commercial property partner clients turn to for ongoing care and improvement.</p>
         </div>
         <div class="panel panel--light">
           <h2>Five Core Values in Practice</h2>
@@ -903,7 +904,14 @@ export function renderProposalFormPage({ preselectedService = '', settings, csrf
           <div class="field"><label for="ti_occupancy">Space condition</label>
             <select id="ti_occupancy" name="ti_occupancy"><option value="">Select...</option><option value="occupied">Occupied</option><option value="vacant">Vacant</option><option value="partial">Partially occupied</option></select>
           </div>
-          <div class="field"><label for="ti_plans_available">Architectural plans / drawings status</label><input type="text" id="ti_plans_available" name="ti_plans_available" maxlength="40"></div>
+          <div class="field"><label for="ti_plans_available">Architectural plans / drawings status</label>
+            <select id="ti_plans_available" name="ti_plans_available">
+              <option value="">Select...</option>
+              <option value="Complete plans available">Complete plans available</option>
+              <option value="Preliminary sketches only">Preliminary sketches only</option>
+              <option value="No plans yet — scope estimate needed">No plans yet — scope estimate needed</option>
+            </select>
+          </div>
           <div class="field"><label for="ti_bid_due_date">Bid due date (if RFP)</label><input type="date" id="ti_bid_due_date" name="ti_bid_due_date"></div>
           <div class="field"><label for="ti_completion_window">Target completion window</label><input type="text" id="ti_completion_window" name="ti_completion_window" maxlength="80"></div>
           <div class="field"><label for="project_budget">Estimated project budget band</label>
@@ -1268,6 +1276,7 @@ export function renderJobApplyPage({ job, settings, csrfToken }) {
           <label for="resume">Resume (${job.resume_policy === 'required' ? 'Required or use alternative contact' : 'Optional'})</label>
           <span id="hint-resume" class="hint">Accepted: one PDF or DOCX file up to 10 MB. Stored securely outside public media libraries.</span>
           <input type="file" id="resume" name="resume" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" aria-describedby="hint-resume">
+          <span class="hint" style="margin-top:0.35rem;">Need help applying or prefer to send your resume another way? Email <a href="mailto:${escapeHtml(settings.recruiting_contact)}">${escapeHtml(settings.recruiting_contact)}</a> or call <a href="tel:${escapeHtml(settings.phone_e164)}">${escapeHtml(settings.phone_display)}</a>.</span>
         </div>
 
         <div class="panel panel--light" style="margin-bottom:1.4rem;">
@@ -1310,6 +1319,7 @@ export function renderApplicationReceivedPage({ refId = '', roleTitle = '', atta
 }
 
 export function renderCampaignLandingPage({ campaign, expired = false }) {
+  const hasImg = Boolean(!expired && campaign.asset && campaign.asset.public_derivative_key);
   return `
   <section class="section">
     <div class="container">
@@ -1325,11 +1335,26 @@ export function renderCampaignLandingPage({ campaign, expired = false }) {
               <a href="/services/" class="btn btn--primary">Explore our services</a>
               <a href="/request-proposal/" class="btn btn--secondary">Request a proposal</a>
             </div>`
-          : `<h1>${escapeHtml(campaign.heading)}</h1>
-            <p style="font-size:1.15rem;color:var(--color-muted-stone);">${escapeHtml(campaign.summary)}</p>
-            <div class="hero__actions">
-              <a href="${escapeHtml(campaign.cta_destination)}" class="btn btn--primary">${escapeHtml(campaign.cta_label)}</a>
-              <a href="/services/" class="btn btn--secondary">View all services</a>
+          : `<div class="${hasImg ? 'hero__grid' : ''}">
+              <div>
+                <h1>${escapeHtml(campaign.heading)}</h1>
+                <p style="font-size:1.15rem;color:var(--color-muted-stone);">${escapeHtml(campaign.summary)}</p>
+                <div class="hero__actions">
+                  <a href="${escapeHtml(campaign.cta_destination)}" class="btn btn--primary">${escapeHtml(campaign.cta_label)}</a>
+                  <a href="/services/" class="btn btn--secondary">View all services</a>
+                </div>
+              </div>
+              ${
+                hasImg
+                  ? `<div class="hero__media">
+                      <img src="/media/${escapeHtml(campaign.asset.public_derivative_key)}"
+                           alt="${escapeHtml(campaign.asset.alt_text || campaign.heading)}"
+                           width="${escapeHtml(campaign.asset.width || 640)}"
+                           height="${escapeHtml(campaign.asset.height || 460)}"
+                           style="object-fit:cover;object-position:${escapeHtml(campaign.asset.focal_x ?? 50)}% ${escapeHtml(campaign.asset.focal_y ?? 50)}%;border-radius:2px;">
+                    </div>`
+                  : ''
+              }
             </div>`
       }
     </div>

@@ -10,6 +10,8 @@ import { handlePublicApi } from './routes/api-public.js';
 import { handleAdminPages } from './routes/admin-pages.js';
 import { handlePublicRoute } from './routes/public.js';
 import { isS3StorageConfigured } from './services/object-store.js';
+import { getFreshsalesStatus } from './services/crm-adapter.js';
+import { getMailerStatus } from './services/mailer.js';
 import { syncAuthPolicyState } from './services/auth.js';
 import { runScheduledWorkerTick, startBackgroundWorker, stopBackgroundWorker } from './services/delivery-worker.js';
 
@@ -82,6 +84,10 @@ export function createRequestHandler({ db, storagePaths = STORAGE_PATHS }) {
             dialect: db.dialect,
             storage: isS3StorageConfigured() ? 's3' : 'local',
             branch: ENV.NEON_BRANCH || 'local',
+            integrations: {
+              freshsales: getFreshsalesStatus().mode,
+              m365_mail: getMailerStatus().configured ? 'configured' : 'unconfigured',
+            },
           })
         );
         return;

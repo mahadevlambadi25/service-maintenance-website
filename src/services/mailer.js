@@ -30,6 +30,13 @@ function getGraphConfig() {
   };
 }
 
+export function getMailerStatus() {
+  const cfg = getGraphConfig();
+  const configured = Boolean(cfg.tenantId && cfg.clientId && cfg.clientSecret && cfg.sender);
+  const senderDomain = cfg.sender.includes('@') ? cfg.sender.split('@')[1] : null;
+  return { configured, senderDomain };
+}
+
 async function getAccessToken(cfg, fetchFn) {
   const now = Date.now();
   if (cachedToken && now < cachedTokenExpiresAtMs - 60_000) {
@@ -50,6 +57,7 @@ async function getAccessToken(cfg, fetchFn) {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: form.toString(),
+      ...(customFetchImpl ? {} : { signal: AbortSignal.timeout(15_000) }),
     });
   } catch (err) {
     return { ok: false, transient: true, error: `Entra token network error: ${err.message}` };
@@ -83,6 +91,10 @@ export async function sendEmailViaMicrosoftGraph({ to, subject, bodyText, replyT
       error: 'Microsoft Graph email not configured (set MS_GRAPH_TENANT_ID, MS_GRAPH_CLIENT_ID, MS_GRAPH_CLIENT_SECRET, M365_SENDER).',
     };
   }
+  const cleanTo = String(to || '').trim();
+  if (!cleanTo || !cleanTo.includes('@')) {
+    return { ok: false, transient: false, error: 'Invalid recipient email address.' };
+  }
 
   const fetchFn = customFetchImpl || globalThis.fetch;
   const auth = await getAccessToken(cfg, fetchFn);
@@ -90,20 +102,20 @@ export async function sendEmailViaMicrosoftGraph({ to, subject, bodyText, replyT
 
   const sendUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(cfg.sender)}/sendMail`;
   const message = {
-    subject: String(subject || '').slice(0, 250),
+    subject: String(subject || '').replace(/[\r\n]+/g, ' ').slice(0, 250),
     body: {
       contentType: 'Text',
       content: String(bodyText || ''),
     },
     toRecipients: [
       {
-        emailAddress: { address: String(to).trim() },
+        emailAddress: { address: cleanTo },
       },
     ],
   };
 
   if (replyTo && String(replyTo).includes('@')) {
-    message.replyTo = [{ emailAddress: { address: String(replyTo).trim() } }];
+    message.replyTo = [{ emailAddress: { address: String(replyTo).replace(/[\r\n]+/g, '').trim() } }];
   }
 
   let res;
@@ -115,6 +127,7 @@ export async function sendEmailViaMicrosoftGraph({ to, subject, bodyText, replyT
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ message, saveToSentItems: true }),
+      ...(customFetchImpl ? {} : { signal: AbortSignal.timeout(15_000) }),
     });
   } catch (err) {
     return { ok: false, transient: true, error: `Graph sendMail network error: ${err.message}` };

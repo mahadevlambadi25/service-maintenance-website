@@ -1087,6 +1087,80 @@ test('Full PRD P0 Acceptance Register Integration Suite', async (t) => {
     const settingsHtml = await (await fetch(`${baseUrl}/admin/settings`, { headers: { Cookie: admin.cookie } })).text();
     assert.ok(settingsHtml.includes('id="admin-inline-alert"'));
     assert.ok(settingsHtml.includes('id="admin-confirm-dialog"'));
+
+    // Redesigned UI/UX: Overview VIEW_CONTENT KPIs + Role-Scoped Expiring Schedules + Progressive Disclosure tabs & Edit User
+    const overviewHtml = await (await fetch(`${baseUrl}/admin/`, { headers: { Cookie: admin.cookie } })).text();
+    assert.ok(overviewHtml.includes('Live Public Pages'));
+    assert.ok(overviewHtml.includes('Pages In Review'));
+    assert.equal(overviewHtml.includes('Expiring Schedules'), false);
+    assert.ok(overviewHtml.includes('My Role Scope'));
+    const pubForOverview = await loginAs(baseUrl, 'publisher@smiaz.local');
+    const pubOverviewHtml = await (await fetch(`${baseUrl}/admin/`, { headers: { Cookie: pubForOverview.cookie } })).text();
+    assert.ok(pubOverviewHtml.includes('Expiring Schedules'));
+
+    const usersDefaultHtml = await (
+      await fetch(`${baseUrl}/admin/users?user=${encodeURIComponent(created.user_id)}`, { headers: { Cookie: admin.cookie } })
+    ).text();
+    assert.ok(usersDefaultHtml.includes('+ Add User'));
+    assert.ok(usersDefaultHtml.includes('id="edit-user-form"'));
+    assert.ok(usersDefaultHtml.includes('Edit User:'));
+    assert.equal(usersDefaultHtml.includes('id="create-user-form"'), false);
+    assert.equal(usersDefaultHtml.includes('PRD Role Explorer &amp; Server-Side Permission Matrix'), false);
+    assert.equal(usersDefaultHtml.includes('Staff Roles &amp; Access Boundaries'), false);
+
+    const usersCreateHtml = await (await fetch(`${baseUrl}/admin/users?action=create`, { headers: { Cookie: admin.cookie } })).text();
+    assert.ok(usersCreateHtml.includes('id="create-user-form"'));
+
+    const usersRolesTabHtml = await (await fetch(`${baseUrl}/admin/users?tab=roles`, { headers: { Cookie: admin.cookie } })).text();
+    assert.ok(usersRolesTabHtml.includes('Staff Roles &amp; Access Boundaries'));
+
+    // Edit User form supports full_name + reactivation + new_password
+    const renameRes = await fetch(`${baseUrl}/admin/api/users/${created.user_id}`, {
+      method: 'POST',
+      headers: { Cookie: admin.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': admin.csrf },
+      body: JSON.stringify({
+        csrf_token: admin.csrf,
+        full_name: 'Updated Contributor Name',
+        role: 'Project Contributor',
+        extra_roles: [],
+        active: true,
+        new_password: 'UpdatedPass!2026',
+      }),
+    });
+    assert.equal(renameRes.status, 200);
+    const updatedUserHtml = await (
+      await fetch(`${baseUrl}/admin/users?user=${encodeURIComponent(created.user_id)}`, { headers: { Cookie: admin.cookie } })
+    ).text();
+    assert.ok(updatedUserHtml.includes('Updated Contributor Name'));
+
+    const reLoginResp = await fetch(`${baseUrl}/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      redirect: 'manual',
+      body: new URLSearchParams({
+        email: 'ops.staff@smiaz.local',
+        password: 'UpdatedPass!2026',
+        totp_code: generateTotpCode(enrolledManualSecret),
+      }),
+    });
+    assert.equal(reLoginResp.status, 302);
+
+    // Module tabs & project filter work cleanly
+    const pagesArticlesHtml = await (await fetch(`${baseUrl}/admin/pages?tab=articles`, { headers: { Cookie: admin.cookie } })).text();
+    assert.ok(pagesArticlesHtml.includes('Insights Articles'));
+    assert.equal(pagesArticlesHtml.includes('<h2>Website Pages</h2>'), false);
+
+    const pagesClaimsHtml = await (await fetch(`${baseUrl}/admin/pages?tab=claims`, { headers: { Cookie: admin.cookie } })).text();
+    assert.ok(pagesClaimsHtml.includes('Fact, Claim &amp; Testimonial Evidence Register'));
+
+    const projectsFilteredResp = await fetch(`${baseUrl}/admin/projects?q=Tempe`, { headers: { Cookie: editor.cookie } });
+    assert.equal(projectsFilteredResp.status, 200);
+    const projectsFilteredHtml = await projectsFilteredResp.text();
+    assert.ok(projectsFilteredHtml.includes('id="prj-q"'));
+
+    const leadsQueuesHtml = await (await fetch(`${baseUrl}/admin/leads?tab=queues`, { headers: { Cookie: admin.cookie } })).text();
+    assert.ok(leadsQueuesHtml.includes('Freshsales CRM Delivery Queue'));
+    assert.ok(leadsQueuesHtml.includes('M365 Notification Dispatch Queue'));
   });
 
   await t.test('PHASE-3-JOBS: Vacancy edit, Phoenix schedule evaluation, applicant search/pagination & resume replace/delete', async () => {
@@ -2509,6 +2583,174 @@ test('Full PRD P0 Acceptance Register Integration Suite', async (t) => {
       if (prevMfaFlag === undefined) delete process.env.ADMIN_MFA_REQUIRED;
       else process.env.ADMIN_MFA_REQUIRED = prevMfaFlag;
       loginCache.clear();
+    }
+  });
+
+  await t.test('STAGE-5-7-UX-REGRESSION: PDF URL, scoped overview/analytics, jobs tabs, plain headings & public copy', async () => {
+    // 1. Capabilities PDF never prints undefined/credentials/
+    const pdfRes = await fetch(`${baseUrl}/credentials/capabilities.pdf`);
+    assert.equal(pdfRes.status, 200);
+    const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
+    assert.equal(pdfBuf.toString('latin1').includes('undefined/credentials/'), false);
+
+    // 2. Public homepage & about page have no internal PRD scaffolding leaks
+    const homeHtml = await (await fetch(`${baseUrl}/`)).text();
+    assert.equal(homeHtml.includes('7. Operating Practices'), false);
+    assert.equal(homeHtml.includes('9. Procurement Proof'), false);
+
+    const aboutHtml = await (await fetch(`${baseUrl}/about/`)).text();
+    assert.equal(aboutHtml.includes('Draft Mission'), false);
+    assert.equal(aboutHtml.includes('Draft Vision'), false);
+
+    // 3. Hiring Reviewer overview KPIs & /admin/jobs default tab are scoped and plain-language
+    const reviewer = await loginAs(baseUrl, 'reviewer@smiaz.local');
+    const revOverviewHtml = await (await fetch(`${baseUrl}/admin/`, { headers: { Cookie: reviewer.cookie } })).text();
+    assert.ok(revOverviewHtml.includes('Your daily priorities, work awaiting review, and quick shortcuts for your role.'));
+
+    const revJobsRes = await fetch(`${baseUrl}/admin/jobs`, { headers: { Cookie: reviewer.cookie } });
+    assert.equal(revJobsRes.status, 200);
+    const revJobsHtml = await revJobsRes.text();
+    assert.ok(revJobsHtml.includes('Applicant Inbox'));
+    assert.equal(revJobsHtml.includes('Vacancies (Isolated Recruiting Domain)'), false);
+
+    // 4. Analytics: Hiring Owner sees Role-Scoped Hiring Activity; Analyst does NOT
+    const hiringOwner = await loginAs(baseUrl, 'hiring@smiaz.local');
+    const hiringAnaRes = await fetch(`${baseUrl}/admin/analytics?range=30d`, { headers: { Cookie: hiringOwner.cookie } });
+    assert.equal(hiringAnaRes.status, 200);
+    const hiringAnaHtml = await hiringAnaRes.text();
+    assert.ok(hiringAnaHtml.includes('Role-Scoped Hiring Activity'));
+    assert.ok(hiringAnaHtml.includes('Avg Review Hours'));
+
+    const analyst = await loginAs(baseUrl, 'analyst@smiaz.local');
+    const analystAnaHtml = await (await fetch(`${baseUrl}/admin/analytics?range=30d`, { headers: { Cookie: analyst.cookie } })).text();
+    assert.equal(analystAnaHtml.includes('Role-Scoped Hiring Activity'), false);
+    assert.ok(analystAnaHtml.includes('Inquiry Funnel by Service'));
+
+    // 5. Settings page uses plain-language business headings
+    const admin = await loginAs(baseUrl, 'admin@smiaz.local');
+    const settingsHtml = await (await fetch(`${baseUrl}/admin/settings`, { headers: { Cookie: admin.cookie } })).text();
+    assert.ok(settingsHtml.includes('Company Contact &amp; Credential Profile'));
+    assert.equal(settingsHtml.includes('Canonical Business Settings'), false);
+  });
+
+  await t.test('PHASE-5-INTEGRATIONS: Campaign automation, S3 resume security, Freshsales & M365 hardening', async () => {
+    // 1. /api/health reports non-secret integration readiness
+    const healthRes = await fetch(`${baseUrl}/api/health`);
+    assert.equal(healthRes.status, 200);
+    const health = await healthRes.json();
+    assert.equal(health.ok, true);
+    assert.ok(health.integrations);
+    assert.equal(typeof health.integrations.freshsales, 'string');
+    assert.equal(typeof health.integrations.m365_mail, 'string');
+
+    // 2. Campaign & job scheduler records audit logs on job auto-open and auto-close
+    const schedJobId = 'job-sched-audit-01';
+    const pastIso = new Date(Date.now() - 120_000).toISOString();
+    const futureIso = new Date(Date.now() + 3_600_000).toISOString();
+    await db.prepare(
+      `INSERT INTO jobs (
+        requisition_id, opening_cycle_id, slug, title, role_family, employment_type, work_area,
+        schedule_text, pay_info, benefits_info, responsibilities_html, qualifications_html,
+        status, publish_at, close_at, hiring_owner_id, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Scheduled', ?, ?, 'usr-hiring-owner-01', ?)`
+    ).run(
+      schedJobId, 'CYC-AUDIT-01', 'scheduled-audit-tech', 'Scheduled Audit Tech',
+      'Maintenance Technician', 'Full-time', 'Greater Phoenix',
+      'Mon-Fri 7am-3:30pm', '$24/hr', 'Standard', '<p>Maintain</p>', '<p>2 yrs</p>',
+      pastIso, futureIso, pastIso
+    );
+    await runScheduleEvaluation(db, new Date());
+    const openedJob = await db.prepare('SELECT status FROM jobs WHERE requisition_id = ?').get(schedJobId);
+    assert.equal(openedJob.status, 'Open');
+    const openAudit = await db.prepare(`SELECT action FROM audit_log WHERE object_id = ? AND action = 'job_auto_opened'`).get(schedJobId);
+    assert.ok(openAudit);
+
+    // 3. S3 / private resume security: quarantined file is isolated in quarantine area and blocked from download
+    const { buildStoragePaths } = await import('../src/config.js');
+    const { createObjectStore } = await import('../src/services/object-store.js');
+    const { sendEmailViaMicrosoftGraph, clearMailerTokenCache } = await import('../src/services/mailer.js');
+    const testStoragePaths = buildStoragePaths(storageRoot);
+    const store = createObjectStore(testStoragePaths);
+
+    // Seed a stale staging object and verify cleanupStaleStagingObjects removes it while keeping fresh objects
+    const staleKey = 'public/resume/stale-abandoned.pdf';
+    const freshKey = 'public/resume/fresh-pending.pdf';
+    await store.putObject({ area: 'staging', key: staleKey, buffer: Buffer.from('%PDF-1.4 stale') });
+    await store.putObject({ area: 'staging', key: freshKey, buffer: Buffer.from('%PDF-1.4 fresh') });
+    const staleFp = path.join(testStoragePaths.privateRoot, 'staging', staleKey);
+    const oldTime = new Date(Date.now() - 48 * 3600 * 1000);
+    fs.utimesSync(staleFp, oldTime, oldTime);
+
+    const cleanupRes = await store.cleanupStaleStagingObjects({ nowDate: new Date() });
+    assert.ok(cleanupRes.deleted >= 1);
+    assert.equal(await store.existsObject({ area: 'staging', key: staleKey }), false);
+    assert.equal(await store.existsObject({ area: 'staging', key: freshKey }), true);
+    await store.deleteObject({ area: 'staging', key: freshKey });
+
+    // Clean resume download enforces strict security headers + sanitized Content-Disposition
+    const hiringOwner = await loginAs(baseUrl, 'hiring@smiaz.local');
+    const appWithResume = await db
+      .prepare(`SELECT a.application_id, att.attachment_id, att.original_display_name FROM applications a JOIN application_attachments att ON att.application_id = a.application_id WHERE att.scan_state = 'clean' AND att.deleted_at IS NULL LIMIT 1`)
+      .get();
+    if (appWithResume) {
+      const dlRes = await fetch(
+        `${baseUrl}/admin/api/applications/${appWithResume.application_id}/attachments/${appWithResume.attachment_id}`,
+        { headers: { Cookie: hiringOwner.cookie } }
+      );
+      assert.equal(dlRes.status, 200);
+      assert.equal(dlRes.headers.get('x-content-type-options'), 'nosniff');
+      assert.equal(dlRes.headers.get('content-security-policy'), "default-src 'none'; sandbox");
+      assert.equal(dlRes.headers.get('cache-control'), 'no-store');
+
+      // Cross-role access (Admin / Content Editor) must still be denied 403
+      const editor = await loginAs(baseUrl, 'editor@smiaz.local');
+      const deniedDl = await fetch(
+        `${baseUrl}/admin/api/applications/${appWithResume.application_id}/attachments/${appWithResume.attachment_id}`,
+        { headers: { Cookie: editor.cookie } }
+      );
+      assert.equal(deniedDl.status, 403);
+    }
+
+    // 4. M365 Mailer header/recipient hardening with mocked Graph API
+    const prevTenant = process.env.MS_GRAPH_TENANT_ID;
+    const prevClient = process.env.MS_GRAPH_CLIENT_ID;
+    const prevSecret = process.env.MS_GRAPH_CLIENT_SECRET;
+    try {
+      process.env.MS_GRAPH_TENANT_ID = 'mock-tenant';
+      process.env.MS_GRAPH_CLIENT_ID = 'mock-client';
+      process.env.MS_GRAPH_CLIENT_SECRET = 'mock-secret';
+      clearMailerTokenCache();
+
+      const badTo = await sendEmailViaMicrosoftGraph({ to: 'invalid-email', subject: 'Test', bodyText: 'Hi' });
+      assert.equal(badTo.ok, false);
+      assert.equal(badTo.transient, false);
+
+      let capturedSubject = '';
+      setMailerFetch(async (url, opts) => {
+        if (String(url).includes('oauth2/v2.0/token')) {
+          return new Response(JSON.stringify({ access_token: 'tok-123', expires_in: 3600 }), { status: 200 });
+        }
+        const payload = JSON.parse(opts.body);
+        capturedSubject = payload.message.subject;
+        return new Response('', { status: 202, headers: { 'request-id': 'req-m365-1' } });
+      });
+      const mailOk = await sendEmailViaMicrosoftGraph({
+        to: 'ops@smiaz.com',
+        subject: "Line1\r\nBcc: evil@attacker.com",
+        bodyText: 'Safe body',
+      });
+      assert.equal(mailOk.ok, true);
+      assert.equal(capturedSubject.includes('\r'), false);
+      assert.equal(capturedSubject.includes('\n'), false);
+    } finally {
+      setMailerFetch(null);
+      clearMailerTokenCache();
+      if (prevTenant === undefined) delete process.env.MS_GRAPH_TENANT_ID;
+      else process.env.MS_GRAPH_TENANT_ID = prevTenant;
+      if (prevClient === undefined) delete process.env.MS_GRAPH_CLIENT_ID;
+      else process.env.MS_GRAPH_CLIENT_ID = prevClient;
+      if (prevSecret === undefined) delete process.env.MS_GRAPH_CLIENT_SECRET;
+      else process.env.MS_GRAPH_CLIENT_SECRET = prevSecret;
     }
   });
 });

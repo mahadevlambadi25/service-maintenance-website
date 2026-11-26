@@ -45,6 +45,17 @@ function getFreshsalesConfig() {
   };
 }
 
+export function getFreshsalesStatus() {
+  const cfg = getFreshsalesConfig();
+  const isProd = ENV.NODE_ENV === 'production' || process.env.NODE_ENV === 'production';
+  const configured = Boolean(cfg.domain && cfg.apiKey);
+  return {
+    configured,
+    hasStageIds: Boolean(cfg.stageQualified && cfg.stageProposal && cfg.stageWon),
+    mode: configured ? 'live' : isProd ? 'unconfigured' : 'sandbox',
+  };
+}
+
 function checkFaultMode() {
   const isProd = ENV.NODE_ENV === 'production' || process.env.NODE_ENV === 'production';
   if (isProd) return null;
@@ -89,6 +100,7 @@ async function freshsalesRequest({ domain, apiKey, path, method = 'POST', body }
         'Content-Type': 'application/json',
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      ...(customFetchImpl ? {} : { signal: AbortSignal.timeout(15_000) }),
     });
   } catch (err) {
     return { ok: false, transient: true, statusCode: 0, error: `Freshsales network error: ${err.message}` };

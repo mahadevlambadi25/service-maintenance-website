@@ -292,6 +292,10 @@
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
+        if (data.setup_url) {
+          showNotification(`${data.message} Share securely with the user: ${window.location.origin}${data.setup_url}`, 'success', true);
+          return;
+        }
         if (data.message) announce(data.message);
         location.reload();
       } else {

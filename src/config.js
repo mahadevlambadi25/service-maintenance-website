@@ -58,6 +58,11 @@ function resolveDefaultBaseUrl() {
 
 export const DEV_FALLBACK_SESSION_SECRET = 'dev-session-secret-change-in-production-32chars';
 
+export function isAdminMfaRequired(env = process.env) {
+  const raw = String(env.ADMIN_MFA_REQUIRED ?? '').trim().toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'yes';
+}
+
 export function validateSecurityConfig(env = process.env) {
   const nodeEnv = env.NODE_ENV || 'development';
   const secret = env.SESSION_SECRET || '';
@@ -91,6 +96,8 @@ export const ENV = {
   S3_BUCKET: process.env.S3_BUCKET || process.env.NEON_STORAGE_BUCKET || 'storage',
   CRON_SECRET: process.env.CRON_SECRET || '',
   SESSION_SECRET: process.env.SESSION_SECRET || DEV_FALLBACK_SESSION_SECRET,
+  MFA_ENCRYPTION_KEY: process.env.MFA_ENCRYPTION_KEY || '',
+  ADMIN_MFA_REQUIRED: isAdminMfaRequired(),
   IS_STAGING: process.env.APP_ENV === 'staging',
   FRESHSALES_DOMAIN: process.env.FRESHSALES_DOMAIN || '',
   FRESHSALES_API_KEY: process.env.FRESHSALES_API_KEY || '',

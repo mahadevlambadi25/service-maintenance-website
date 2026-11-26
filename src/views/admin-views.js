@@ -1,5 +1,4 @@
-import { ENV, ROLES } from '../config.js';
-import { generateTotpCode } from '../lib/crypto.js';
+import { ENV, isAdminMfaRequired, ROLES } from '../config.js';
 import { escapeHtml } from '../lib/sanitize.js';
 import { formatPhoenixDateTime, utcIsoToPhoenixInput } from '../lib/time.js';
 import { hasPermission, PERMISSIONS } from '../services/auth.js';
@@ -34,7 +33,7 @@ export function renderPaginationNav(basePath, meta, extraParams = {}) {
   </nav>`;
 }
 
-export function renderAdminLoginPage({ error = '', requireMfa = false, email = '', demoAccounts = [], nonce = '' }) {
+export function renderAdminLoginPage({ error = '', requireMfa = false, mfaRequired = isAdminMfaRequired(), email = '', nonce = '' }) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -52,8 +51,17 @@ export function renderAdminLoginPage({ error = '', requireMfa = false, email = '
     <div class="container" style="max-width:34rem;">
       <span class="eyebrow">Protected Operations Workspace</span>
       <h1>Staff Dashboard Sign In</h1>
-      <p class="muted">Individual company identity and 6-digit MFA verification required. No shared administrator accounts.</p>
+      <p class="muted">${
+        mfaRequired
+          ? 'Individual company identity and 6-digit MFA verification required. No shared administrator accounts.'
+          : 'Individual company identity required. Multi-factor authentication is temporarily disabled (Email + Password mode).'
+      }</p>
 
+      ${
+        !mfaRequired
+          ? `<div class="status-banner status-banner--warning" role="status"><strong>Temporary Auth Policy Active:</strong> MFA check is disabled via <code>ADMIN_MFA_REQUIRED=false</code>. Re-enable <code>ADMIN_MFA_REQUIRED=true</code> to restore full PRD compliance.</div>`
+          : ''
+      }
       ${error ? `<div class="status-banner status-banner--error" role="alert">${escapeHtml(error)}</div>` : ''}
 
       <form method="POST" action="/admin/login" class="admin-card">
@@ -65,40 +73,168 @@ export function renderAdminLoginPage({ error = '', requireMfa = false, email = '
           <label for="login-pass">Password</label>
           <input type="password" id="login-pass" name="password" required autocomplete="current-password">
         </div>
-        <div class="field">
-          <label for="login-totp">6-Digit Authenticator MFA Code ${requireMfa ? '(Required)' : ''}</label>
-          <span class="hint">Time-based TOTP authenticator code.</span>
-          <input type="text" id="login-totp" name="totp_code" inputmode="numeric" pattern="\\d{6}" maxlength="6" autocomplete="one-time-code" required>
-        </div>
-        <button type="submit" class="btn btn--primary" style="width:100%;">Sign in with MFA</button>
+        ${
+          mfaRequired
+            ? `<div class="field">
+                <label for="login-totp">6-Digit Authenticator MFA Code ${requireMfa ? '(Required)' : ''}</label>
+                <span class="hint">Time-based TOTP authenticator code.</span>
+                <input type="text" id="login-totp" name="totp_code" inputmode="numeric" pattern="\\d{6}" maxlength="6" autocomplete="one-time-code" required>
+              </div>`
+            : ''
+        }
+        <button type="submit" class="btn btn--primary" style="width:100%;">${mfaRequired ? 'Sign in with MFA' : 'Sign in with Email & Password'}</button>
       </form>
 
       ${
-        ENV.NODE_ENV !== 'production' && demoAccounts.length > 0
-          ? `<details class="admin-card">
-              <summary style="cursor:pointer;font-weight:700;">Local Dev / QA Staff Accounts (Password: SM-Staff-2026!)</summary>
-              <p class="muted" style="font-size:0.85rem;margin-top:0.5rem;">Current live TOTP codes shown only in non-production development mode for testing all 7 RBAC roles:</p>
-              <div class="table-scroll" tabindex="0" role="region" aria-label="Development Staff Accounts">
-                <table class="data-table" style="font-size:0.82rem;margin:0;">
-                  <thead><tr><th>Role</th><th>Email</th><th>Live TOTP</th></tr></thead>
-                  <tbody>
-                    ${demoAccounts
-                      .map(
-                        (u) => `<tr>
-                          <td>${escapeHtml(u.role)}</td>
-                          <td><code>${escapeHtml(u.email)}</code></td>
-                          <td><code>${escapeHtml(generateTotpCode(u.totp_secret))}</code></td>
-                        </tr>`
-                      )
-                      .join('')}
-                  </tbody>
-                </table>
+        mfaRequired
+          ? `<p style="margin-top:0.85rem;font-size:0.9rem;">
+              <a href="/admin/mfa-setup">First-time Google Authenticator setup or MFA recovery &rarr;</a>
+            </p>`
+          : `<p style="margin-top:0.85rem;font-size:0.9rem;" class="muted">
+              MFA enrollment &amp; recovery data are preserved in the database and can be pre-configured or restored via <a href="/admin/mfa-setup">/admin/mfa-setup</a>.
+            </p>`
+      }
+      <p><a href="/">&larr; Return to public website</a></p>
+    </div>
+  </main>
+  <script nonce="${escapeHtml(nonce)}"></script>
+</body>
+</html>`;
+}
+
+export function renderAdminMfaSetupPage({
+  stage = 'verify_identity',
+  error = '',
+  info = '',
+  email = '',
+  setupToken = '',
+  tokenPurpose = '',
+  signedInUser = null,
+  qrDataUri = '',
+  manualSecret = '',
+  recoveryCodes = [],
+  csrfToken = '',
+  nonce = '',
+}) {
+  const formattedManualSecret = String(manualSecret || '').replace(/(.{4})/g, '$1 ').trim();
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Google Authenticator MFA Setup &amp; Recovery | Service Maintenance</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/svg+xml" href="/assets/brand-mark.svg">
+  <link rel="stylesheet" href="/css/tokens.css">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="stylesheet" href="/css/admin.css">
+</head>
+<body>
+  <main id="main-content" class="section">
+    <div class="container" style="max-width:40rem;">
+      <span class="eyebrow">Authorized Multi-Factor Authentication</span>
+      <h1>Google Authenticator Setup &amp; Recovery</h1>
+      <p class="muted">Connecting or rotating MFA requires identity verification and live 6-digit TOTP confirmation. Unauthorized users cannot initiate setup.</p>
+
+      ${error ? `<div class="status-banner status-banner--error" role="alert">${escapeHtml(error)}</div>` : ''}
+      ${info ? `<div class="status-banner status-banner--success" role="status">${escapeHtml(info)}</div>` : ''}
+
+      ${
+        stage === 'verify_identity'
+          ? `<form method="POST" action="/admin/mfa-setup" class="admin-card">
+              <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+              <input type="hidden" name="step" value="begin">
+              <h2 style="font-size:1.25rem;">Step 1: Verify Identity &amp; Authorization</h2>
+              <div class="field">
+                <label for="mfa-email">Staff Email</label>
+                <input type="email" id="mfa-email" name="email" value="${escapeHtml(email)}" required autocomplete="username" autocorrect="off" autocapitalize="none" spellcheck="false">
               </div>
-            </details>`
-          : ''
+              <div class="field">
+                <label for="mfa-pass">Account Password</label>
+                <input type="password" id="mfa-pass" name="password" required autocomplete="current-password">
+              </div>
+
+              ${
+                signedInUser
+                  ? `<div class="field">
+                      <label for="mfa-current-totp">Current 6-Digit Authenticator Code (if already enrolled)</label>
+                      <span class="hint">Confirm your current authenticator device before rotating to a new QR code.</span>
+                      <input type="text" id="mfa-current-totp" name="current_totp" inputmode="numeric" pattern="\\d{6}" maxlength="6" autocomplete="one-time-code">
+                    </div>`
+                  : setupToken
+                    ? `<input type="hidden" name="setup_token" value="${escapeHtml(setupToken)}">
+                       <p class="muted" style="font-size:0.86rem;">Authorization mode: <strong>${escapeHtml(tokenPurpose === 'recovery' ? 'Administrator Recovery Token' : 'First-Time Enrollment Token')}</strong></p>`
+                    : `<fieldset class="choice-group">
+                        <legend>Authorization Credential (Required)</legend>
+                        <div class="field">
+                          <label for="mfa-setup-token">One-Time Setup / Recovery Token</label>
+                          <span class="hint">Issued by an administrator or the server operator CLI (<code>npm run admin:mfa-setup</code>).</span>
+                          <input type="text" id="mfa-setup-token" name="setup_token" value="${escapeHtml(setupToken)}" autocorrect="off" autocapitalize="none" spellcheck="false">
+                        </div>
+                        <div class="field" style="margin-block-end:0;">
+                          <label for="mfa-recovery-code">Or Emergency Single-Use Recovery Code (if already enrolled)</label>
+                          <span class="hint">Format: <code>XXXX-XXXX-XX</code> saved from your prior enrollment.</span>
+                          <input type="text" id="mfa-recovery-code" name="recovery_code" placeholder="XXXX-XXXX-XX" autocorrect="off" autocapitalize="characters" spellcheck="false">
+                        </div>
+                      </fieldset>`
+              }
+
+              <button type="submit" class="btn btn--primary" style="width:100%;">Verify Identity &amp; Generate QR Code</button>
+            </form>`
+          : stage === 'verify_qr'
+            ? `<div class="admin-card">
+                <h2 style="font-size:1.25rem;">Step 2: Link Google Authenticator</h2>
+                <p>Account: <strong>${escapeHtml(email)}</strong></p>
+                <ol style="padding-inline-start:1.25rem;">
+                  <li>Open <strong>Google Authenticator</strong> on your phone and tap <strong>+</strong>.</li>
+                  <li>Choose <strong>Scan a QR code</strong> and scan the code below, <strong>or</strong> choose <strong>Enter a setup key</strong> (Time-based) with the manual key.</li>
+                  <li>Enter the live <strong>6-digit code</strong> displayed in Google Authenticator to lock in MFA.</li>
+                </ol>
+
+                <div style="display:flex;flex-wrap:wrap;gap:1.5rem;align-items:center;margin-block:1.25rem;">
+                  <div style="background:#FAF8F3;padding:0.75rem;border:1px solid rgba(36,37,31,0.2);border-radius:6px;">
+                    <img src="${escapeHtml(qrDataUri)}" alt="Google Authenticator QR code for ${escapeHtml(email)}" width="220" height="220">
+                  </div>
+                  <div style="flex:1 1 220px;min-width:0;">
+                    <p style="font-weight:700;margin-bottom:0.35rem;">Manual Setup Key (Time-based TOTP)</p>
+                    <p class="muted" style="font-size:0.84rem;margin-bottom:0.5rem;">If camera scanning is unavailable, enter this key manually in Google Authenticator:</p>
+                    <code style="display:block;padding:0.65rem 0.75rem;background:var(--color-bone);border:1px solid rgba(36,37,31,0.2);border-radius:4px;font-size:0.95rem;letter-spacing:0.06em;word-break:break-all;">${escapeHtml(formattedManualSecret)}</code>
+                  </div>
+                </div>
+
+                <form method="POST" action="/admin/mfa-setup">
+                  <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+                  <input type="hidden" name="step" value="confirm">
+                  <div class="field">
+                    <label for="mfa-confirm-totp">6-Digit Code from Google Authenticator</label>
+                    <span class="hint">Confirm your device shows the matching 6-digit time-based code before enrollment takes effect.</span>
+                    <input type="text" id="mfa-confirm-totp" name="totp_code" inputmode="numeric" pattern="\\d{6}" maxlength="6" autocomplete="one-time-code" required>
+                  </div>
+                  <button type="submit" class="btn btn--primary" style="width:100%;">Verify &amp; Activate Google Authenticator</button>
+                </form>
+              </div>`
+            : `<div class="admin-card">
+                <h2 style="font-size:1.25rem;">Google Authenticator Enrolled &amp; Active</h2>
+                <p>MFA enrollment succeeded for <strong>${escapeHtml(email)}</strong>. Prior sessions were revoked and your authenticated session is now active.</p>
+                <div class="status-banner status-banner--warning" role="status">
+                  <strong>Save These One-Time Recovery Codes Offline Now:</strong> Each code can authorize MFA device recovery once if you lose your phone. They cannot be viewed again after leaving this page.
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:0.55rem;margin-bottom:1.25rem;">
+                  ${recoveryCodes
+                    .map(
+                      (c) => `<code style="padding:0.45rem 0.6rem;background:var(--color-bone);border:1px solid rgba(36,37,31,0.18);border-radius:4px;text-align:center;font-weight:700;">${escapeHtml(c)}</code>`
+                    )
+                    .join('')}
+                </div>
+                <a href="/admin/" class="btn btn--primary" style="width:100%;">Continue to Admin Dashboard</a>
+              </div>`
       }
 
-      <p><a href="/">&larr; Return to public website</a></p>
+      <p style="margin-top:1rem;">
+        <a href="/admin/login">&larr; Return to Staff Sign In</a>
+        ${signedInUser ? ' &middot; <a href="/admin/">Return to Dashboard</a>' : ''}
+      </p>
     </div>
   </main>
   <script nonce="${escapeHtml(nonce)}"></script>
@@ -175,6 +311,11 @@ export function renderAdminShell({ title, user, csrfToken, currentSection, bodyH
           <button type="button" id="admin-inline-alert-close" class="btn btn--secondary" style="min-height:36px;padding:0.2rem 0.65rem;font-size:0.8rem;" aria-label="Dismiss notification">Dismiss</button>
         </div>
       </div>
+      ${
+        !isAdminMfaRequired()
+          ? `<div class="status-banner status-banner--warning" role="status"><strong>Temporary Auth Deviation:</strong> Staff MFA enforcement is currently disabled (<code>ADMIN_MFA_REQUIRED=false</code>). Re-enable <code>ADMIN_MFA_REQUIRED=true</code> in environment configuration for PRD compliance.</div>`
+          : ''
+      }
       ${flash ? `<div class="status-banner status-banner--success" role="status">${escapeHtml(flash)}</div>` : ''}
       ${bodyHtml}
     </main>
@@ -1713,7 +1854,7 @@ export function renderAdminSettingsView({
 
     <section class="admin-card">
       <h2>Staff Accounts, Roles &amp; Session Controls</h2>
-      <p class="muted" style="font-size:0.84rem;">Deactivating a staff user or changing their role immediately revokes all active sessions server-side.</p>
+      <p class="muted" style="font-size:0.84rem;">Deactivating a staff user or changing their role immediately revokes all active sessions server-side. <a href="/admin/mfa-setup">Manage or rotate your own Google Authenticator &rarr;</a></p>
       <div class="table-scroll" tabindex="0" role="region" aria-label="Staff Accounts Table">
         <table class="data-table" style="font-size:0.84rem;">
           <thead><tr><th>Staff Member</th><th>Role &amp; Extra Roles</th><th>MFA / Sessions</th><th>Status &amp; Actions</th></tr></thead>
@@ -1739,12 +1880,13 @@ export function renderAdminSettingsView({
                         : `${escapeHtml(u.role)}${extra.length ? `<br><small class="muted">+ ${escapeHtml(extra.join(', '))}</small>` : ''}`
                     }
                   </td>
-                  <td>${u.mfa_enabled ? 'Enabled (TOTP)' : 'Off'}<br><small class="muted">${sessCount} active session(s)</small></td>
+                  <td>${u.mfa_enabled ? (u.mfa_enrolled ? 'Enrolled (TOTP)' : 'Setup Pending (TOTP)') : 'Off'}<br><small class="muted">${sessCount} active session(s)</small></td>
                   <td>
                     <span class="badge ${u.active ? 'badge--live' : 'badge--err'}">${u.active ? 'Active' : 'Revoked'}</span>
                     ${
                       canManageUsers
                         ? `<div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.4rem;">
+                            <button type="button" class="btn btn--secondary js-action-btn" style="min-height:32px;padding:0.2rem 0.5rem;font-size:0.75rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/mfa-recovery-token">Issue MFA Setup Link</button>
                             <button type="button" class="btn btn--secondary js-action-btn" style="min-height:32px;padding:0.2rem 0.5rem;font-size:0.75rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/revoke-sessions">Revoke Sessions</button>
                             ${
                               u.active

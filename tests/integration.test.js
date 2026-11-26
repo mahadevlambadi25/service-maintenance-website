@@ -1873,4 +1873,422 @@ test('Full PRD P0 Acceptance Register Integration Suite', async (t) => {
       else process.env.CRON_SECRET = prevCron;
     }
   });
+
+  await t.test('MFA-ENROLL-01: First-time Google Authenticator enrollment denies unauthorized callers and enforces password + TOTP', async () => {
+    const prevMfaFlag = process.env.ADMIN_MFA_REQUIRED;
+    process.env.ADMIN_MFA_REQUIRED = 'true';
+    loginCache.clear();
+    try {
+      const { issueMfaSetupToken, syncAuthPolicyState } = await import('../src/services/auth.js');
+      await syncAuthPolicyState(db);
+      const editor = await loginAs(baseUrl, 'editor@smiaz.local');
+
+    // Prepare an un-enrolled staff/admin state on usr-admin-01 for first-time enrollment verification
+    await db
+      .prepare(`UPDATE users SET mfa_enrolled = 0, mfa_enrolled_at = NULL, mfa_pending_secret = NULL WHERE user_id = 'usr-admin-01'`)
+      .run();
+
+    // 1. Visiting GET /admin/mfa-setup unauthenticated NEVER reveals QR code or secret
+    const getUnauth = await fetch(`${baseUrl}/admin/mfa-setup`);
+    assert.equal(getUnauth.status, 200);
+    const getUnauthHtml = await getUnauth.text();
+    assert.equal(getUnauthHtml.includes('data:image/svg+xml;base64,'), false);
+    assert.equal(getUnauthHtml.includes('JBSWY3DPEHPK3PXP'), false);
+    const setupCsrfCookie = (getUnauth.headers.getSetCookie?.() || [getUnauth.headers.get('set-cookie')]).find((c) => c?.startsWith('sm_mfa_csrf=')).split(';')[0];
+    const formCsrf = getUnauthHtml.match(/name="csrf_token" value="([^"]+)"/)[1];
+
+    // 2. Unauthorized attempt WITHOUT token/session (even with valid password!) MUST BE DENIED (403)
+    const unauthBegin = await fetch(`${baseUrl}/admin/mfa-setup`, {
+      method: 'POST',
+      headers: { Cookie: setupCsrfCookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: formCsrf,
+        step: 'begin',
+        email: 'admin@smiaz.local',
+        password: 'SM-Staff-2026!',
+      }).toString(),
+    });
+    assert.equal(unauthBegin.status, 403);
+    const unauthRow = await db.prepare(`SELECT mfa_enrolled, mfa_pending_secret FROM users WHERE user_id = 'usr-admin-01'`).get();
+    assert.equal(unauthRow.mfa_enrolled, 0);
+    assert.equal(unauthRow.mfa_pending_secret, null);
+
+    // 3. Non-admin staff CANNOT issue recovery/setup links (403 Forbidden)
+    const nonAdminIssue = await fetch(`${baseUrl}/admin/api/users/usr-admin-01/mfa-recovery-token`, {
+      method: 'POST',
+      headers: { Cookie: editor.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': editor.csrf },
+      body: JSON.stringify({ csrf_token: editor.csrf }),
+    });
+    assert.equal(nonAdminIssue.status, 403);
+
+    // 4. Forged/invalid setup token is rejected (403)
+    const forgedGet = await fetch(`${baseUrl}/admin/mfa-setup?token=forged-invalid-token-1234567890`);
+    assert.equal(forgedGet.status, 403);
+
+    // 5. Issue single-use authorized first-time enrollment token & verify raw token is hashed in DB
+    const issued = await issueMfaSetupToken(db, {
+      userId: 'usr-admin-01',
+      purpose: 'first_time_enroll',
+      issuedBy: 'operator-cli',
+      ttlMinutes: 15,
+    });
+    assert.equal(issued.ok, true);
+    const tokenDbRow = await db.prepare('SELECT token_hash, used_at FROM mfa_recovery_tokens WHERE token_id = ?').get(issued.tokenId);
+    assert.notEqual(tokenDbRow.token_hash, issued.rawToken);
+    assert.equal(tokenDbRow.used_at, null);
+
+    const tokenGet = await fetch(`${baseUrl}/admin/mfa-setup?token=${encodeURIComponent(issued.rawToken)}`);
+    assert.equal(tokenGet.status, 200);
+    const tokenGetHtml = await tokenGet.text();
+    assert.equal(tokenGetHtml.includes('data:image/svg+xml;base64,'), false);
+    const step1CsrfCookie = (tokenGet.headers.getSetCookie?.() || [tokenGet.headers.get('set-cookie')]).find((c) => c?.startsWith('sm_mfa_csrf=')).split(';')[0];
+    const step1Csrf = tokenGetHtml.match(/name="csrf_token" value="([^"]+)"/)[1];
+
+    // 6. Wrong password fails identity verification (401) without revealing QR
+    const wrongPassRes = await fetch(`${baseUrl}/admin/mfa-setup`, {
+      method: 'POST',
+      headers: { Cookie: step1CsrfCookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: step1Csrf,
+        step: 'begin',
+        email: 'admin@smiaz.local',
+        password: 'WrongPassword!123',
+        setup_token: issued.rawToken,
+      }).toString(),
+    });
+    assert.equal(wrongPassRes.status, 401);
+    const step1RetryCsrfCookie = (wrongPassRes.headers.getSetCookie?.() || [wrongPassRes.headers.get('set-cookie')]).find((c) => c?.startsWith('sm_mfa_csrf=')).split(';')[0];
+    const step1RetryHtml = await wrongPassRes.text();
+    const step1RetryCsrf = step1RetryHtml.match(/name="csrf_token" value="([^"]+)"/)[1];
+
+    // 7. Correct password reveals QR SVG data URI + formatted manual setup key & stores encrypted pending secret
+    const beginOkRes = await fetch(`${baseUrl}/admin/mfa-setup`, {
+      method: 'POST',
+      headers: { Cookie: step1RetryCsrfCookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: step1RetryCsrf,
+        step: 'begin',
+        email: 'admin@smiaz.local',
+        password: 'SM-Staff-2026!',
+        setup_token: issued.rawToken,
+      }).toString(),
+    });
+    assert.equal(beginOkRes.status, 200);
+    const step2Html = await beginOkRes.text();
+    assert.ok(step2Html.includes('data:image/svg+xml;base64,'));
+    const secretMatch = step2Html.match(/<code[^>]*>([A-Z2-7 ]{16,})<\/code>/);
+    assert.ok(secretMatch);
+    const enrolledManualSecret = secretMatch[1].replace(/\s+/g, '');
+    const step2Csrf = step2Html.match(/name="csrf_token" value="([^"]+)"/)[1];
+    const step2Cookies = (beginOkRes.headers.getSetCookie?.() || [beginOkRes.headers.get('set-cookie')])
+      .map((c) => c.split(';')[0])
+      .join('; ');
+
+    const dbPendingRow = await db.prepare(`SELECT mfa_pending_secret FROM users WHERE user_id = 'usr-admin-01'`).get();
+    assert.ok(dbPendingRow.mfa_pending_secret.startsWith('enc:v1:'));
+
+    // 8. Wrong TOTP code fails confirmation (422) and leaves token unconsumed
+    const badTotpRes = await fetch(`${baseUrl}/admin/mfa-setup`, {
+      method: 'POST',
+      headers: { Cookie: step2Cookies, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: step2Csrf,
+        step: 'confirm',
+        totp_code: '000000',
+      }).toString(),
+    });
+    assert.equal(badTotpRes.status, 422);
+
+    // 9. Valid 6-digit TOTP code activates encrypted secret, consumes token, issues session & recovery codes
+    const validTotp = generateTotpCode(enrolledManualSecret);
+    const confirmOkRes = await fetch(`${baseUrl}/admin/mfa-setup`, {
+      method: 'POST',
+      headers: { Cookie: step2Cookies, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: step2Csrf,
+        step: 'confirm',
+        totp_code: validTotp,
+      }).toString(),
+    });
+    assert.equal(confirmOkRes.status, 200);
+    const completeHtml = await confirmOkRes.text();
+    assert.ok(completeHtml.includes('Google Authenticator Enrolled'));
+    const recCodeMatch = completeHtml.match(/[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{2}/);
+    assert.ok(recCodeMatch);
+    const savedRecoveryCode = recCodeMatch[0];
+
+    const enrolledSessionCookie = (confirmOkRes.headers.getSetCookie?.() || [confirmOkRes.headers.get('set-cookie')])
+      .find((c) => c?.startsWith('sm_staff_session='))
+      .split(';')[0];
+    assert.ok(enrolledSessionCookie);
+
+    // Replaying the same single-use token is now rejected (403)
+    const replayTokenGet = await fetch(`${baseUrl}/admin/mfa-setup?token=${encodeURIComponent(issued.rawToken)}`);
+    assert.equal(replayTokenGet.status, 403);
+
+    // Verify encrypted DB state + dashboard session persistence
+    const updatedUserRow = await db.prepare(`SELECT totp_secret, mfa_enrolled, mfa_pending_secret, recovery_codes_json FROM users WHERE user_id = 'usr-admin-01'`).get();
+    assert.equal(updatedUserRow.mfa_enrolled, 1);
+    assert.equal(updatedUserRow.mfa_pending_secret, null);
+    assert.ok(updatedUserRow.totp_secret.startsWith('enc:v1:'));
+    assert.equal(updatedUserRow.recovery_codes_json.includes(savedRecoveryCode.replace(/-/g, '')), false);
+
+    const dashAfterEnroll = await fetch(`${baseUrl}/admin/`, { headers: { Cookie: enrolledSessionCookie }, redirect: 'manual' });
+    assert.equal(dashAfterEnroll.status, 200);
+    const dashHtml = await dashAfterEnroll.text();
+    const dashCsrf = dashHtml.match(/data-csrf="([^"]+)"/)[1];
+
+    // Logout & verify login succeeds ONLY with new Google Authenticator TOTP, rejecting old secret
+    await fetch(`${baseUrl}/admin/logout`, {
+      method: 'POST',
+      headers: { Cookie: enrolledSessionCookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ csrf_token: dashCsrf }).toString(),
+    });
+    const freshLoginOk = await fetch(`${baseUrl}/admin/login`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        email: 'admin@smiaz.local',
+        password: 'SM-Staff-2026!',
+        totp_code: generateTotpCode(enrolledManualSecret),
+      }).toString(),
+    });
+    assert.equal(freshLoginOk.status, 302);
+    const freshCookie = freshLoginOk.headers.get('set-cookie').split(';')[0];
+
+    // Store recovery code & session cookie on db context via local variable check in MFA-RECOVER-02:
+    const recoverPageGet = await fetch(`${baseUrl}/admin/mfa-setup`);
+    const recCsrfCookie = (recoverPageGet.headers.getSetCookie?.() || [recoverPageGet.headers.get('set-cookie')]).find((c) => c?.startsWith('sm_mfa_csrf=')).split(';')[0];
+    const recFormCsrf = (await recoverPageGet.text()).match(/name="csrf_token" value="([^"]+)"/)[1];
+
+    // MFA-RECOVER-02: Recover using password + single-use recovery code -> rotates secret, invalidates old sessions, blocks code reuse
+    const recBeginRes = await fetch(`${baseUrl}/admin/mfa-setup`, {
+      method: 'POST',
+      headers: { Cookie: recCsrfCookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: recFormCsrf,
+        step: 'begin',
+        email: 'admin@smiaz.local',
+        password: 'SM-Staff-2026!',
+        recovery_code: savedRecoveryCode,
+      }).toString(),
+    });
+    assert.equal(recBeginRes.status, 200);
+    const recStep2Html = await recBeginRes.text();
+    const recSecret = recStep2Html.match(/<code[^>]*>([A-Z2-7 ]{16,})<\/code>/)[1].replace(/\s+/g, '');
+    assert.notEqual(recSecret, enrolledManualSecret);
+    const recStep2Csrf = recStep2Html.match(/name="csrf_token" value="([^"]+)"/)[1];
+    const recStep2Cookies = (recBeginRes.headers.getSetCookie?.() || [recBeginRes.headers.get('set-cookie')])
+      .map((c) => c.split(';')[0])
+      .join('; ');
+
+    const recConfirmRes = await fetch(`${baseUrl}/admin/mfa-setup`, {
+      method: 'POST',
+      headers: { Cookie: recStep2Cookies, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: recStep2Csrf,
+        step: 'confirm',
+        totp_code: generateTotpCode(recSecret),
+      }).toString(),
+    });
+    assert.equal(recConfirmRes.status, 200);
+
+    // Prior session MUST be revoked after MFA recovery!
+    const oldSessAfterRec = await fetch(`${baseUrl}/admin/`, { headers: { Cookie: freshCookie }, redirect: 'manual' });
+    assert.equal(oldSessAfterRec.status, 302);
+
+    // Reusing the same recovery code MUST be rejected!
+    const recReuseGet = await fetch(`${baseUrl}/admin/mfa-setup`);
+    const reuseCsrfCookie = (recReuseGet.headers.getSetCookie?.() || [recReuseGet.headers.get('set-cookie')]).find((c) => c?.startsWith('sm_mfa_csrf=')).split(';')[0];
+    const reuseCsrf = (await recReuseGet.text()).match(/name="csrf_token" value="([^"]+)"/)[1];
+    const reuseRes = await fetch(`${baseUrl}/admin/mfa-setup`, {
+      method: 'POST',
+      headers: { Cookie: reuseCsrfCookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: reuseCsrf,
+        step: 'begin',
+        email: 'admin@smiaz.local',
+        password: 'SM-Staff-2026!',
+        recovery_code: savedRecoveryCode,
+      }).toString(),
+    });
+    assert.equal(reuseRes.status, 403);
+
+    // Platform Admin can issue a recovery link for another enrolled user via dashboard API
+    const newSessionCookie = (recConfirmRes.headers.getSetCookie?.() || [recConfirmRes.headers.get('set-cookie')])
+      .find((c) => c?.startsWith('sm_staff_session='))
+      .split(';')[0];
+    const newDashHtml = await (await fetch(`${baseUrl}/admin/`, { headers: { Cookie: newSessionCookie } })).text();
+    const newAdminCsrf = newDashHtml.match(/data-csrf="([^"]+)"/)[1];
+    const adminIssueLinkRes = await fetch(`${baseUrl}/admin/api/users/usr-editor-01/mfa-recovery-token`, {
+      method: 'POST',
+      headers: { Cookie: newSessionCookie, 'Content-Type': 'application/json', 'X-CSRF-Token': newAdminCsrf },
+      body: JSON.stringify({ csrf_token: newAdminCsrf }),
+    });
+    assert.equal(adminIssueLinkRes.status, 200);
+    const adminIssueLinkJson = await adminIssueLinkRes.json();
+    assert.ok(adminIssueLinkJson.setup_url.startsWith('/admin/mfa-setup?token='));
+    } finally {
+      if (prevMfaFlag === undefined) delete process.env.ADMIN_MFA_REQUIRED;
+      else process.env.ADMIN_MFA_REQUIRED = prevMfaFlag;
+      loginCache.clear();
+    }
+  });
+
+  await t.test('AUTH-MFA-FLAG-01: Configurable ADMIN_MFA_REQUIRED supports password-only login, UI toggle, RBAC, expiry & session invalidation', async () => {
+    const prevMfaFlag = process.env.ADMIN_MFA_REQUIRED;
+    const { resetRateLimitBuckets, syncAuthPolicyState } = await import('../src/services/auth.js');
+    const { generateUuid } = await import('../src/lib/crypto.js');
+    resetRateLimitBuckets();
+    loginCache.clear();
+
+    try {
+      // Phase A: ADMIN_MFA_REQUIRED=false -> Email + Password only
+      process.env.ADMIN_MFA_REQUIRED = 'false';
+      await syncAuthPolicyState(db);
+
+      const loginPageRes = await fetch(`${baseUrl}/admin/login`);
+      assert.equal(loginPageRes.status, 200);
+      const loginHtml = await loginPageRes.text();
+      assert.equal(loginHtml.includes('id="login-totp"'), false);
+      assert.equal(loginHtml.includes('name="totp_code"'), false);
+      assert.equal(loginHtml.includes('SM-Staff-2026'), false);
+      assert.equal(loginHtml.includes('JBSWY3DPEHPK3PXP'), false);
+      assert.ok(loginHtml.includes('Email & Password'));
+
+      // Wrong password rejected (401)
+      const badPassRes = await fetch(`${baseUrl}/admin/login`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ email: 'editor@smiaz.local', password: 'WrongPassword#999' }).toString(),
+      });
+      assert.equal(badPassRes.status, 401);
+
+      // Valid Email + Password login WITHOUT totp_code succeeds + preserves MFA DB fields
+      const beforeEditorRow = await db.prepare('SELECT totp_secret, mfa_enabled, mfa_enrolled FROM users WHERE user_id = ?').get('usr-editor-01');
+      const pwLoginRes = await fetch(`${baseUrl}/admin/login`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ email: 'editor@smiaz.local', password: 'SM-Staff-2026!' }).toString(),
+      });
+      assert.equal(pwLoginRes.status, 302);
+      const setCookieRaw = pwLoginRes.headers.get('set-cookie');
+      assert.ok(setCookieRaw.includes('HttpOnly'));
+      const pwSessionCookie = setCookieRaw.split(';')[0];
+      const pwSid = decodeURIComponent(pwSessionCookie.split('=')[1]);
+      const sessRow = await db.prepare('SELECT mfa_verified FROM sessions WHERE session_id = ?').get(pwSid);
+      assert.equal(sessRow.mfa_verified, 0);
+
+      // Dashboard access, RBAC, and CSRF still strictly enforced
+      const editorDashRes = await fetch(`${baseUrl}/admin/`, { headers: { Cookie: pwSessionCookie } });
+      assert.equal(editorDashRes.status, 200);
+      const editorDashHtml = await editorDashRes.text();
+      assert.ok(editorDashHtml.includes('ADMIN_MFA_REQUIRED=false'));
+      const editorCsrf = editorDashHtml.match(/data-csrf="([^"]+)"/)[1];
+
+      const rbacDenyRes = await fetch(`${baseUrl}/admin/settings`, { headers: { Cookie: pwSessionCookie } });
+      assert.equal(rbacDenyRes.status, 403);
+
+      const csrfDenyRes = await fetch(`${baseUrl}/admin/api/users/usr-editor-01/revoke-sessions`, {
+        method: 'POST',
+        headers: { Cookie: pwSessionCookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      assert.equal(csrfDenyRes.status, 403);
+
+      const afterEditorRow = await db.prepare('SELECT totp_secret, mfa_enabled, mfa_enrolled FROM users WHERE user_id = ?').get('usr-editor-01');
+      assert.deepEqual(afterEditorRow, beforeEditorRow);
+
+      // Expired session check
+      const expSid = `exp-${generateUuid()}`;
+      await db
+        .prepare(
+          `INSERT INTO sessions (session_id, user_id, csrf_token, mfa_verified, expires_at, created_at, ip_hash)
+           VALUES (?, 'usr-editor-01', 'c1', 0, ?, ?, 'h')`
+        )
+        .run(expSid, new Date(Date.now() - 60_000).toISOString(), new Date().toISOString());
+      const expRes = await fetch(`${baseUrl}/admin/`, {
+        headers: { Cookie: `sm_staff_session=${expSid}` },
+        redirect: 'manual',
+      });
+      assert.equal(expRes.status, 302);
+
+      // Logout clears session cleanly
+      const logoutRes = await fetch(`${baseUrl}/admin/logout`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { Cookie: pwSessionCookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ csrf_token: editorCsrf }).toString(),
+      });
+      assert.equal(logoutRes.status, 302);
+      const afterLogoutDash = await fetch(`${baseUrl}/admin/`, { headers: { Cookie: pwSessionCookie }, redirect: 'manual' });
+      assert.equal(afterLogoutDash.status, 302);
+
+      // Create another password-only session BEFORE flipping policy to true
+      const preToggleLogin = await fetch(`${baseUrl}/admin/login`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ email: 'editor@smiaz.local', password: 'SM-Staff-2026!' }).toString(),
+      });
+      const preToggleCookie = preToggleLogin.headers.get('set-cookie').split(';')[0];
+
+      // Phase B: Re-enable ADMIN_MFA_REQUIRED=true -> MUST invalidate old password-only session and require TOTP!
+      process.env.ADMIN_MFA_REQUIRED = 'true';
+      const policyUp = await syncAuthPolicyState(db);
+      assert.equal(policyUp.changed, true);
+
+      const oldPwSessBlocked = await fetch(`${baseUrl}/admin/`, { headers: { Cookie: preToggleCookie }, redirect: 'manual' });
+      assert.equal(oldPwSessBlocked.status, 302);
+
+      const mfaLoginHtml = await (await fetch(`${baseUrl}/admin/login`)).text();
+      assert.ok(mfaLoginHtml.includes('id="login-totp"'));
+      assert.ok(mfaLoginHtml.includes('name="totp_code"'));
+
+      const pwOnlyBlocked = await fetch(`${baseUrl}/admin/login`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ email: 'editor@smiaz.local', password: 'SM-Staff-2026!' }).toString(),
+      });
+      assert.equal(pwOnlyBlocked.status, 401);
+
+      // Re-enabled MFA accepts existing preserved TOTP secret without re-provisioning
+      const mfaLoginOk = await fetch(`${baseUrl}/admin/login`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          email: 'editor@smiaz.local',
+          password: 'SM-Staff-2026!',
+          totp_code: generateTotpCode('KRSXG5CTMVRXEZLU'),
+        }).toString(),
+      });
+      assert.equal(mfaLoginOk.status, 302);
+      const mfaSessCookie = mfaLoginOk.headers.get('set-cookie').split(';')[0];
+      const mfaDashOk = await fetch(`${baseUrl}/admin/`, { headers: { Cookie: mfaSessCookie } });
+      assert.equal(mfaDashOk.status, 200);
+
+      // Phase C: Policy flip true -> false ALSO invalidates old MFA sessions cleanly and records audit log
+      process.env.ADMIN_MFA_REQUIRED = 'false';
+      const policyDown = await syncAuthPolicyState(db);
+      assert.equal(policyDown.changed, true);
+
+      const oldMfaSessBlocked = await fetch(`${baseUrl}/admin/`, { headers: { Cookie: mfaSessCookie }, redirect: 'manual' });
+      assert.equal(oldMfaSessBlocked.status, 302);
+
+      const policyAudit = await db
+        .prepare(`SELECT action, details_json FROM audit_log WHERE domain = 'auth' AND action = 'auth_policy_changed' ORDER BY created_at DESC LIMIT 1`)
+        .get();
+      assert.ok(policyAudit);
+      assert.ok(policyAudit.details_json.includes('"sessions_invalidated":true'));
+    } finally {
+      if (prevMfaFlag === undefined) delete process.env.ADMIN_MFA_REQUIRED;
+      else process.env.ADMIN_MFA_REQUIRED = prevMfaFlag;
+      loginCache.clear();
+    }
+  });
 });

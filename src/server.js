@@ -10,6 +10,7 @@ import { handlePublicApi } from './routes/api-public.js';
 import { handleAdminPages } from './routes/admin-pages.js';
 import { handlePublicRoute } from './routes/public.js';
 import { isS3StorageConfigured } from './services/object-store.js';
+import { syncAuthPolicyState } from './services/auth.js';
 import { runScheduledWorkerTick, startBackgroundWorker, stopBackgroundWorker } from './services/delivery-worker.js';
 
 function isAuthorizedCronRequest(req) {
@@ -126,6 +127,7 @@ export async function initializeAppRuntime({ dbPath = null, storageRoot = null }
   if (!existingSettings) {
     await seedDatabase(db);
   }
+  await syncAuthPolicyState(db);
   const handler = createRequestHandler({ db, storagePaths });
   return { db, storagePaths, handler };
 }

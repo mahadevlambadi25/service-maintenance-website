@@ -222,6 +222,9 @@ export async function getDb(customPath = null, storagePaths = STORAGE_PATHS, { f
   if (!needsMigration) {
     try {
       const check = await runtimePool.query('SELECT id FROM business_settings WHERE id = 1 LIMIT 1');
+      await runtimePool.query('SELECT mfa_enrolled, mfa_pending_secret, recovery_codes_json FROM users LIMIT 1');
+      await runtimePool.query('SELECT token_id FROM mfa_recovery_tokens LIMIT 1');
+      await runtimePool.query('SELECT mfa_required FROM auth_policy_state LIMIT 1');
       if (!check.rows?.length) {
         needsMigration = true;
       }
@@ -310,6 +313,23 @@ const CORE_SCHEMA_DDL = `
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
     ip_hash TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS mfa_recovery_tokens (
+    token_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    purpose TEXT NOT NULL,
+    issued_by TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS auth_policy_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    mfa_required INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS audit_log (
@@ -813,6 +833,10 @@ export async function migrateSchema(db) {
     ['media_assets', 'scan_state', "TEXT DEFAULT 'clean'"],
     ['inquiries', 'legal_hold', 'INTEGER DEFAULT 0'],
     ['applications', 'legal_hold', 'INTEGER DEFAULT 0'],
+    ['users', 'mfa_enrolled', 'INTEGER NOT NULL DEFAULT 0'],
+    ['users', 'mfa_enrolled_at', 'TEXT'],
+    ['users', 'mfa_pending_secret', 'TEXT'],
+    ['users', 'recovery_codes_json', "TEXT NOT NULL DEFAULT '[]'"],
   ];
 
   for (const [table, column, definition] of additiveColumns) {

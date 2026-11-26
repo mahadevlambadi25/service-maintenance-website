@@ -1,19 +1,28 @@
-import { DEMO_USERS } from '../db/seed.js';
+import QRCode from 'qrcode';
+import { ENV, isAdminMfaRequired } from '../config.js';
+import { randomToken, signHmac, verifyHmac } from '../lib/crypto.js';
 import { parseRequestBody } from '../lib/multipart.js';
 import { escapeHtml } from '../lib/sanitize.js';
 import { formatPhoenixDateTime, phoenixLocalToUtcIso } from '../lib/time.js';
 import {
   authenticateSession,
+  beginMfaEnrollment,
+  buildMfaPendingCookie,
   buildSessionCookie,
   canAccessApplicationRecord,
   canAccessJobRecord,
   checkRateLimit,
+  clearMfaPendingCookie,
   clearSessionCookie,
+  completeMfaEnrollment,
   createPendingOrVerifiedSession,
   hasPermission,
+  parseCookies,
   PERMISSIONS,
+  readMfaPendingCookie,
   recordAudit,
   ROLE_PERMISSION_MAP,
+  validateMfaSetupToken,
 } from '../services/auth.js';
 import { getAnalyticsSummary } from '../services/analytics.js';
 import { detectCampaignSlotConflicts, resolveActiveCampaigns } from '../services/campaign-engine.js';
@@ -72,22 +81,27 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
 
   // 1. Login / Logout
   if (pathname === '/admin/login') {
+    const mfaRequired = isAdminMfaRequired();
     if (req.method === 'GET') {
-      sendHtml(res, 200, AdminViews.renderAdminLoginPage({ demoAccounts: DEMO_USERS, nonce }));
+      sendHtml(res, 200, AdminViews.renderAdminLoginPage({ mfaRequired, nonce }));
       return true;
     }
     if (req.method === 'POST') {
       const ip = req.socket?.remoteAddress || 'unknown';
       const rl = checkRateLimit(`login:${ip}`, 15, 60_000);
       if (!rl.allowed) {
-        sendHtml(res, 429, AdminViews.renderAdminLoginPage({ error: 'Too many login attempts. Please wait 60 seconds.', demoAccounts: DEMO_USERS, nonce }));
+        sendHtml(
+          res,
+          429,
+          AdminViews.renderAdminLoginPage({ error: 'Too many login attempts. Please wait 60 seconds.', mfaRequired, nonce })
+        );
         return true;
       }
       const { fields } = await parseRequestBody(req, 64 * 1024);
       const authRes = await createPendingOrVerifiedSession(db, {
         email: fields.email,
         password: fields.password,
-        totpCode: fields.totp_code,
+        totpCode: mfaRequired ? fields.totp_code : undefined,
         ip,
       });
       if (!authRes.ok) {
@@ -97,8 +111,8 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
           AdminViews.renderAdminLoginPage({
             error: authRes.error,
             requireMfa: authRes.requireMfa,
+            mfaRequired,
             email: fields.email || '',
-            demoAccounts: DEMO_USERS,
             nonce,
           })
         );
@@ -106,6 +120,233 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       }
       redirect(res, '/admin/', { 'Set-Cookie': buildSessionCookie(authRes.sessionId) });
       return true;
+    }
+  }
+
+  // 1b. Authorized Google Authenticator MFA First-Time Setup & Recovery
+  if (pathname === '/admin/mfa-setup') {
+    const setupCsrfCookieName = 'sm_mfa_csrf';
+    const ip = req.socket?.remoteAddress || 'unknown';
+    const existingSession = await authenticateSession(db, req);
+    const getSetupSecret = () => process.env.SESSION_SECRET || ENV.SESSION_SECRET;
+    const makeCsrfCookie = (tok) => {
+      const sig = signHmac(tok, getSetupSecret());
+      const isHttps = ENV.BASE_URL.startsWith('https://');
+      return `${setupCsrfCookieName}=${encodeURIComponent(`${tok}.${sig}`)}; Path=/admin/mfa-setup; HttpOnly; SameSite=Lax; Max-Age=900${isHttps ? '; Secure' : ''}`;
+    };
+    const readCsrfCookie = () => {
+      const cookies = parseCookies(req);
+      const raw = cookies[setupCsrfCookieName];
+      if (!raw || !raw.includes('.')) return null;
+      const [tok, sig] = raw.split('.');
+      if (!verifyHmac(tok, sig, getSetupSecret())) return null;
+      return tok;
+    };
+
+    if (req.method === 'GET') {
+      const queryToken = String(urlObj.searchParams.get('token') || '').trim();
+      let error = '';
+      let info = '';
+      let email = existingSession?.email || '';
+      let tokenPurpose = '';
+      let validSetupToken = '';
+      let status = 200;
+
+      if (queryToken) {
+        const check = await validateMfaSetupToken(db, queryToken);
+        if (!check.ok) {
+          status = check.status || 403;
+          error = check.error;
+        } else {
+          validSetupToken = queryToken;
+          tokenPurpose = check.tokenRow.purpose;
+          email = check.tokenRow.email;
+          info =
+            tokenPurpose === 'first_time_enroll'
+              ? 'First-time authenticator setup link verified. Confirm your account password to generate your Google Authenticator QR code.'
+              : 'Administrator recovery link verified. Confirm your password to re-enroll a new authenticator device.';
+        }
+      }
+
+      const csrfTok = randomToken(24);
+      sendHtml(
+        res,
+        status,
+        AdminViews.renderAdminMfaSetupPage({
+          stage: 'verify_identity',
+          error,
+          info,
+          email,
+          setupToken: validSetupToken,
+          tokenPurpose,
+          signedInUser: existingSession,
+          csrfToken: csrfTok,
+          nonce,
+        }),
+        { 'Set-Cookie': makeCsrfCookie(csrfTok) }
+      );
+      return true;
+    }
+
+    if (req.method === 'POST') {
+      const { fields } = await parseRequestBody(req, 64 * 1024);
+      const cookieCsrf = readCsrfCookie();
+      if (!cookieCsrf || !fields.csrf_token || fields.csrf_token !== cookieCsrf) {
+        sendHtml(
+          res,
+          403,
+          AdminViews.renderAdminMfaSetupPage({
+            stage: 'verify_identity',
+            error: 'Security verification expired. Reload /admin/mfa-setup and try again.',
+            signedInUser: existingSession,
+            csrfToken: randomToken(24),
+            nonce,
+          }),
+          { 'Set-Cookie': makeCsrfCookie(randomToken(24)) }
+        );
+        return true;
+      }
+
+      const step = String(fields.step || 'begin');
+      if (step === 'begin') {
+        const resBegin = await beginMfaEnrollment(db, {
+          email: fields.email,
+          password: fields.password,
+          setupToken: fields.setup_token,
+          recoveryCode: fields.recovery_code,
+          currentTotp: fields.current_totp,
+          session: existingSession,
+          ip,
+        });
+        if (!resBegin.ok) {
+          const nextCsrf = randomToken(24);
+          sendHtml(
+            res,
+            resBegin.status || 403,
+            AdminViews.renderAdminMfaSetupPage({
+              stage: 'verify_identity',
+              error: resBegin.error,
+              email: fields.email || existingSession?.email || '',
+              setupToken: fields.setup_token || '',
+              signedInUser: existingSession,
+              csrfToken: nextCsrf,
+              nonce,
+            }),
+            { 'Set-Cookie': makeCsrfCookie(nextCsrf) }
+          );
+          return true;
+        }
+
+        const qrSvg = await QRCode.toString(resBegin.otpauthUri, {
+          type: 'svg',
+          width: 220,
+          margin: 2,
+          color: { dark: '#24251F', light: '#FAF8F3' },
+        });
+        const qrDataUri = `data:image/svg+xml;base64,${Buffer.from(qrSvg, 'utf8').toString('base64')}`;
+        const nextCsrf = resBegin.pendingContext.csrf;
+        sendHtml(
+          res,
+          200,
+          AdminViews.renderAdminMfaSetupPage({
+            stage: 'verify_qr',
+            email: resBegin.user.email,
+            qrDataUri,
+            manualSecret: resBegin.pendingPlainSecret,
+            csrfToken: nextCsrf,
+            signedInUser: existingSession,
+            nonce,
+          }),
+          {
+            'Set-Cookie': [makeCsrfCookie(nextCsrf), buildMfaPendingCookie(resBegin.pendingContext)],
+          }
+        );
+        return true;
+      }
+
+      if (step === 'confirm') {
+        const pendingContext = readMfaPendingCookie(req);
+        if (!pendingContext || pendingContext.csrf !== fields.csrf_token) {
+          const nextCsrf = randomToken(24);
+          sendHtml(
+            res,
+            403,
+            AdminViews.renderAdminMfaSetupPage({
+              stage: 'verify_identity',
+              error: 'Pending MFA setup session expired or invalid. Restart setup cleanly.',
+              signedInUser: existingSession,
+              csrfToken: nextCsrf,
+              nonce,
+            }),
+            { 'Set-Cookie': [makeCsrfCookie(nextCsrf), clearMfaPendingCookie()] }
+          );
+          return true;
+        }
+
+        const resComplete = await completeMfaEnrollment(db, {
+          pendingContext,
+          totpCode: fields.totp_code,
+          ip,
+        });
+
+        if (!resComplete.ok) {
+          if (resComplete.status === 422 && resComplete.pendingPlainSecret) {
+            const qrSvg = await QRCode.toString(resComplete.otpauthUri, {
+              type: 'svg',
+              width: 220,
+              margin: 2,
+              color: { dark: '#24251F', light: '#FAF8F3' },
+            });
+            const qrDataUri = `data:image/svg+xml;base64,${Buffer.from(qrSvg, 'utf8').toString('base64')}`;
+            sendHtml(
+              res,
+              422,
+              AdminViews.renderAdminMfaSetupPage({
+                stage: 'verify_qr',
+                error: resComplete.error,
+                email: resComplete.user?.email || '',
+                qrDataUri,
+                manualSecret: resComplete.pendingPlainSecret,
+                csrfToken: pendingContext.csrf,
+                signedInUser: existingSession,
+                nonce,
+              })
+            );
+            return true;
+          }
+
+          const nextCsrf = randomToken(24);
+          sendHtml(
+            res,
+            resComplete.status || 400,
+            AdminViews.renderAdminMfaSetupPage({
+              stage: 'verify_identity',
+              error: resComplete.error,
+              signedInUser: existingSession,
+              csrfToken: nextCsrf,
+              nonce,
+            }),
+            { 'Set-Cookie': [makeCsrfCookie(nextCsrf), clearMfaPendingCookie()] }
+          );
+          return true;
+        }
+
+        sendHtml(
+          res,
+          200,
+          AdminViews.renderAdminMfaSetupPage({
+            stage: 'complete',
+            email: resComplete.user.email,
+            recoveryCodes: resComplete.recoveryCodes,
+            signedInUser: resComplete.user,
+            nonce,
+          }),
+          {
+            'Set-Cookie': [clearMfaPendingCookie(), buildSessionCookie(resComplete.sessionId)],
+          }
+        );
+        return true;
+      }
     }
   }
 
@@ -718,7 +959,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
     }
     const settings = await getCanonicalSettings(db);
     const users = await db
-      .prepare('SELECT user_id, email, full_name, role, extra_roles_json, mfa_enabled, active, created_at, updated_at FROM users ORDER BY active DESC, role ASC, full_name ASC')
+      .prepare('SELECT user_id, email, full_name, role, extra_roles_json, mfa_enabled, mfa_enrolled, mfa_enrolled_at, active, created_at, updated_at FROM users ORDER BY active DESC, role ASC, full_name ASC')
       .all();
     const sessionRows = await db
       .prepare('SELECT user_id, COUNT(*) as session_count FROM sessions WHERE expires_at > ? GROUP BY user_id')

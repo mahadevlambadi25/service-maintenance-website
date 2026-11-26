@@ -2,7 +2,7 @@ import { loadLocalEnvFiles } from '../src/config.js';
 import { closeDb, getDb } from '../src/db/database.js';
 import { generateTotpSecret, hashPassword, randomToken } from '../src/lib/crypto.js';
 import { isValidEmail } from '../src/lib/validation.js';
-import { recordAudit, revokeUserSessions } from '../src/services/auth.js';
+import { encryptMfaSecret, issueMfaSetupToken, recordAudit, revokeUserSessions } from '../src/services/auth.js';
 
 function parseArgs(argv) {
   const args = {};
@@ -40,17 +40,12 @@ async function main() {
         'Usage:',
         '  node scripts/admin-recovery.mjs --email admin@smiaz.local --confirm-reset [--new-email admin@company.com] [--rotate-mfa] [--password-env NEW_ADMIN_PASSWORD]',
         '',
-        'Environment Variables (can be placed temporarily in .env.local):',
-        '  ADMIN_EMAIL                  Existing target staff email (if --email is omitted)',
-        '  ADMIN_NEW_EMAIL              Optional new email address to assign to the account',
-        '  NEW_ADMIN_PASSWORD           New strong password (min 12 chars)',
-        '',
         'Options:',
         '  --email <email>              Existing target staff account email (required unless ADMIN_EMAIL is set)',
         '  --new-email <email>          Optional replacement email address for this user',
         '  --confirm-reset              Required explicit confirmation flag before modifying any database row',
-        '  --password-env <VAR>         Read the new password (min 12 chars) from process.env[VAR] instead of NEW_ADMIN_PASSWORD / auto-generating',
-        '  --rotate-mfa                 Generate a fresh RFC 6238 Base32 TOTP secret (recommended on recovery or post-seed rotation)',
+        '  --password-env <VAR>         Read the new password (min 12 chars) from process.env[VAR]',
+        '  --rotate-mfa                 Reset MFA enrollment state & issue a single-use /admin/mfa-setup recovery URL',
         '',
         'No database records were modified.',
       ].join('\n')
@@ -75,7 +70,7 @@ async function main() {
 
   const db = await getDb();
   try {
-    const user = await db.prepare('SELECT user_id, email, full_name, role, totp_secret, mfa_enabled, active FROM users WHERE email = ?').get(email);
+    const user = await db.prepare('SELECT user_id, email, full_name, role, totp_secret, mfa_enabled, mfa_enrolled, active FROM users WHERE email = ?').get(email);
     if (!user) {
       throw new Error(`No staff account found for email: ${email}`);
     }
@@ -91,15 +86,16 @@ async function main() {
     const nowIso = new Date().toISOString();
     const nextPasswordHash = hashPassword(newPassword);
     const rotateMfa = Boolean(args['rotate-mfa']);
-    const nextTotpSecret = rotateMfa ? generateTotpSecret() : user.totp_secret;
+    const nextTotpSecret = rotateMfa ? encryptMfaSecret(generateTotpSecret()) : user.totp_secret;
+    const nextMfaEnrolled = rotateMfa ? 0 : (user.mfa_enrolled || 0);
 
     await db
       .prepare(
         `UPDATE users
-         SET email = ?, password_hash = ?, totp_secret = ?, mfa_enabled = 1, active = 1, updated_at = ?
+         SET email = ?, password_hash = ?, totp_secret = ?, mfa_enabled = 1, mfa_enrolled = ?, mfa_pending_secret = NULL, active = 1, updated_at = ?
          WHERE user_id = ?`
       )
-      .run(nextEmail, nextPasswordHash, nextTotpSecret, nowIso, user.user_id);
+      .run(nextEmail, nextPasswordHash, nextTotpSecret, nextMfaEnrolled, nowIso, user.user_id);
 
     await revokeUserSessions(db, user.user_id);
     await recordAudit(
@@ -112,20 +108,18 @@ async function main() {
       { email_changed: nextEmail !== user.email, rotated_mfa: rotateMfa, sessions_revoked: true }
     );
 
-    const issuer = 'ServiceMaintenanceAdmin';
-    const otpauthUri = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(nextEmail)}?secret=${nextTotpSecret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
-
     console.log(`Updated credentials for ${nextEmail} (${user.role}) and revoked all active sessions.`);
-    if (!passEnvName) {
-      console.log(`Generated strong password: ${newPassword}`);
-    } else {
-      console.log(`Password updated securely from environment variable ${passEnvName} (value not printed).`);
-    }
+    console.log(passEnvName ? `Password updated from ${passEnvName} (secret value not printed).` : 'Password rotated to a newly generated random secret (not printed).');
     if (rotateMfa) {
-      console.log(`New TOTP secret rotated (Base32): ${nextTotpSecret}`);
-      console.log(`Authenticator URI: ${otpauthUri}`);
+      const tokenRes = await issueMfaSetupToken(db, {
+        userId: user.user_id,
+        purpose: 'first_time_enroll',
+        issuedBy: 'operator-cli',
+        ttlMinutes: 15,
+      });
+      console.log(`MFA enrollment reset; open /admin/mfa-setup?token=${tokenRes.rawToken} to pair Google Authenticator (expires ${tokenRes.expiresAt}).`);
     } else {
-      console.log('Existing TOTP secret preserved (pass --rotate-mfa to issue a new TOTP secret).');
+      console.log('Existing MFA secret preserved (pass --rotate-mfa to issue a single-use QR enrollment link).');
     }
   } finally {
     await closeDb();

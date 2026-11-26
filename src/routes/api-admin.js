@@ -10,7 +10,9 @@ import {
   authenticateSession,
   canAccessApplicationRecord,
   canAccessJobRecord,
+  encryptMfaSecret,
   hasPermission,
+  issueMfaSetupToken,
   PERMISSIONS,
   recordAudit,
   revokeUserSessions,
@@ -2035,17 +2037,51 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
     }
     const userId = `usr-${generateUuid().slice(0, 12)}`;
     const totpSecret = generateTotpSecret();
+    const encryptedTotpSecret = encryptMfaSecret(totpSecret);
     const mfaEnabled = fields.mfa_enabled === false || fields.mfa_enabled === 'false' || fields.mfa_enabled === '0' ? 0 : 1;
 
     await db.prepare(
       `INSERT INTO users (
         user_id, email, full_name, password_hash, role, extra_roles_json,
-        totp_secret, mfa_enabled, active, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
-    ).run(userId, email, fullName, hashPassword(password), role, JSON.stringify(extraRoles), totpSecret, mfaEnabled, nowIso, nowIso);
+        totp_secret, mfa_enabled, mfa_enrolled, active, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)`
+    ).run(userId, email, fullName, hashPassword(password), role, JSON.stringify(extraRoles), encryptedTotpSecret, mfaEnabled, nowIso, nowIso);
 
     await recordAudit(db, session, 'users', 'create_user', 'user', userId, { role, extraRoles, mfa_enabled: Boolean(mfaEnabled) });
     sendJson(res, 201, { ok: true, user_id: userId, totp_secret: totpSecret });
+    return true;
+  }
+
+  const mfaRecoveryMatch = pathname.match(/^\/admin\/api\/users\/([a-zA-Z0-9-]+)\/mfa-recovery-token$/);
+  if (mfaRecoveryMatch) {
+    if (!hasPermission(session, PERMISSIONS.MANAGE_USERS)) {
+      sendJson(res, 403, { ok: false, message: 'Forbidden: Platform Administrator required.' });
+      return true;
+    }
+    const targetId = mfaRecoveryMatch[1];
+    const targetUser = await db.prepare('SELECT user_id, email, mfa_enrolled, active FROM users WHERE user_id = ?').get(targetId);
+    if (!targetUser || !targetUser.active) {
+      sendJson(res, 404, { ok: false, message: 'Active staff account not found.' });
+      return true;
+    }
+    const purpose = targetUser.mfa_enrolled ? 'recovery' : 'first_time_enroll';
+    const tokenRes = await issueMfaSetupToken(db, {
+      userId: targetUser.user_id,
+      purpose,
+      issuedBy: session.user_id,
+      ttlMinutes: 15,
+    });
+    if (!tokenRes.ok) {
+      sendJson(res, tokenRes.status || 422, { ok: false, message: tokenRes.error });
+      return true;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      purpose: tokenRes.purpose,
+      expires_at: tokenRes.expiresAt,
+      setup_url: `/admin/mfa-setup?token=${tokenRes.rawToken}`,
+      message: `Single-use 15-minute MFA ${purpose === 'recovery' ? 'recovery' : 'setup'} link issued for ${targetUser.email}.`,
+    });
     return true;
   }
 

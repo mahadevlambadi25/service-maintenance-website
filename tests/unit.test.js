@@ -4,10 +4,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  buildTotpOtpAuthUri,
+  decryptSecret,
+  encryptSecret,
+  generateRecoveryCodes,
   generateTotpCode,
   generateTotpSecret,
   hashPassword,
+  hashRecoveryCodeList,
   verifyPassword,
+  verifyRecoveryCodeInList,
   verifyTotpCode,
 } from '../src/lib/crypto.js';
 import {
@@ -235,4 +241,34 @@ test('canAccessJobRecord and canAccessApplicationRecord enforce strict assigned 
   assert.equal(await canAccessApplicationRecord(fakeDb, owner2, app), false);
   assert.equal(await canAccessApplicationRecord(fakeDb, reviewerAssigned, app), true);
   assert.equal(await canAccessApplicationRecord(fakeDb, reviewerUnassigned, app), false);
+});
+
+test('AES-256-GCM MFA encryption, otpauth URI, and single-use recovery code hashing', () => {
+  const key = 'test-mfa-encryption-key-material-32bytes';
+  const secret = generateTotpSecret();
+  const encrypted = encryptSecret(secret, key);
+  assert.ok(encrypted.startsWith('enc:v1:'));
+  assert.equal(encrypted.includes(secret), false);
+  assert.equal(decryptSecret(encrypted, key), secret);
+  assert.equal(decryptSecret(secret, key), secret); // Legacy Base32 backward compatibility
+  assert.throws(() => decryptSecret(`${encrypted.slice(0, -2)}ff`, key));
+
+  const uri = buildTotpOtpAuthUri({ issuer: 'ServiceMaintenance', email: 'admin@smiaz.local', secret });
+  assert.ok(uri.startsWith('otpauth://totp/ServiceMaintenance%3Aadmin%40smiaz.local?'));
+
+  const codes = generateRecoveryCodes(8);
+  assert.equal(codes.length, 8);
+  const hashedJson = JSON.stringify(hashRecoveryCodeList(codes));
+  assert.equal(hashedJson.includes(codes[0].replace(/-/g, '')), false);
+  assert.equal(verifyRecoveryCodeInList(codes[0], hashedJson).matched, true);
+  assert.equal(verifyRecoveryCodeInList('WRONG-CODE-00', hashedJson).matched, false);
+});
+
+test('isAdminMfaRequired feature flag parses true/false cleanly', async () => {
+  const { isAdminMfaRequired } = await import('../src/config.js');
+  assert.equal(isAdminMfaRequired({}), false);
+  assert.equal(isAdminMfaRequired({ ADMIN_MFA_REQUIRED: 'false' }), false);
+  assert.equal(isAdminMfaRequired({ ADMIN_MFA_REQUIRED: '0' }), false);
+  assert.equal(isAdminMfaRequired({ ADMIN_MFA_REQUIRED: 'true' }), true);
+  assert.equal(isAdminMfaRequired({ ADMIN_MFA_REQUIRED: '1' }), true);
 });

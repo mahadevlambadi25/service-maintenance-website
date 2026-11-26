@@ -1,7 +1,52 @@
 import { ENV, isAdminMfaRequired, ROLES } from '../config.js';
 import { escapeHtml } from '../lib/sanitize.js';
 import { formatPhoenixDateTime, utcIsoToPhoenixInput } from '../lib/time.js';
-import { hasPermission, PERMISSIONS } from '../services/auth.js';
+import { getUserRoles, hasPermission, PERMISSIONS } from '../services/auth.js';
+
+const ROLE_DISPLAY_NAMES = {
+  [ROLES.PLATFORM_ADMIN]: 'Platform Administrator',
+  [ROLES.CONTENT_EDITOR]: 'Content Editor',
+  [ROLES.APPROVER_PUBLISHER]: 'Approver and Publisher',
+  [ROLES.HIRING_OWNER]: 'Hiring Owner / Administrator',
+  [ROLES.PROJECT_CONTRIBUTOR]: 'Project Contributor',
+  [ROLES.HIRING_REVIEWER]: 'Hiring Reviewer',
+  [ROLES.ANALYST]: 'Analyst',
+};
+
+const ROLE_DESCRIPTIONS = {
+  [ROLES.PLATFORM_ADMIN]: 'Manage staff accounts, roles, canonical settings, CRM delivery, backups, and non-hiring audit logs. No hiring-data access by default.',
+  [ROLES.CONTENT_EDITOR]: 'Draft website pages, articles, factual claims, seasonal campaigns, and project drafts, and submit items for publisher review.',
+  [ROLES.APPROVER_PUBLISHER]: 'Approve factual claims and photo rights, publish/schedule/withdraw content and campaigns, restore revisions to draft, and inspect review queues.',
+  [ROLES.HIRING_OWNER]: 'Create, edit, schedule, open, pause, close, and reopen assigned job requisitions; review scoped applicants; assign reviewers; perform authorized CSV exports.',
+  [ROLES.PROJECT_CONTRIBUTOR]: 'Create project drafts, upload metadata-stripped photography, adjust focal points, and pair before/after views. Cannot publish or access applicants.',
+  [ROLES.HIRING_REVIEWER]: 'Review applicants and record factual interview/stage assessments strictly for assigned vacancies. Cannot edit jobs, administer roles, or export CSVs.',
+  [ROLES.ANALYST]: 'Read PII-free first-party analytics events, inquiry funnel summaries, campaign engagement metrics, and project readiness reports.',
+};
+
+const PERMISSION_META = [
+  { key: PERMISSIONS.VIEW_CONTENT, label: 'View Content & Previews' },
+  { key: PERMISSIONS.EDIT_CONTENT, label: 'Create & Edit Content' },
+  { key: PERMISSIONS.APPROVE_CONTENT, label: 'Approve Content & Return Drafts' },
+  { key: PERMISSIONS.PUBLISH_CONTENT, label: 'Publish & Restore Content' },
+  { key: PERMISSIONS.EDIT_PROJECTS, label: 'Manage Projects & B/A Pairs' },
+  { key: PERMISSIONS.UPLOAD_PROJECT_MEDIA, label: 'Upload & Crop Project Media' },
+  { key: PERMISSIONS.PUBLISH_PROJECTS, label: 'Approve Rights & Publish Projects' },
+  { key: PERMISSIONS.MANAGE_CAMPAIGNS, label: 'Create & Edit Campaigns' },
+  { key: PERMISSIONS.PUBLISH_CAMPAIGNS, label: 'Approve & Schedule Campaigns' },
+  { key: PERMISSIONS.MANAGE_VACANCIES, label: 'Manage Assigned Jobs & Resumes' },
+  { key: PERMISSIONS.REVIEW_APPLICATIONS, label: 'Review Assigned Applications' },
+  { key: PERMISSIONS.EXPORT_APPLICATIONS, label: 'Export Permitted Applicants CSV' },
+  { key: PERMISSIONS.MANAGE_LEADS_CRM, label: 'Manage Leads & CRM Queue' },
+  { key: PERMISSIONS.VIEW_ANALYTICS, label: 'View PII-Free Analytics' },
+  { key: PERMISSIONS.MANAGE_USERS, label: 'Manage Users & Roles' },
+  { key: PERMISSIONS.MANAGE_SETTINGS, label: 'Manage Business Settings' },
+  { key: PERMISSIONS.MANAGE_BACKUPS, label: 'Manage Backups & Retention' },
+  { key: PERMISSIONS.VIEW_AUDIT, label: 'View Non-Hiring Audit Logs' },
+];
+
+function getRoleDisplayLabel(role) {
+  return ROLE_DISPLAY_NAMES[role] || role;
+}
 
 export function renderPaginationNav(basePath, meta, extraParams = {}) {
   if (!meta || meta.totalPages <= 1) {
@@ -242,18 +287,48 @@ export function renderAdminMfaSetupPage({
 </html>`;
 }
 
-export function renderAdminShell({ title, user, csrfToken, currentSection, bodyHtml, nonce = '', flash = '' }) {
-  const nav = [
-    { id: 'overview', href: '/admin/', label: 'Overview', show: true },
-    { id: 'pages', href: '/admin/pages', label: 'Website & Pages', show: hasPermission(user, PERMISSIONS.EDIT_CONTENT) || hasPermission(user, PERMISSIONS.MANAGE_SETTINGS) },
-    { id: 'campaigns', href: '/admin/campaigns', label: 'Seasonal Campaigns', show: hasPermission(user, PERMISSIONS.MANAGE_CAMPAIGNS) },
-    { id: 'projects', href: '/admin/projects', label: 'Projects & Media', show: hasPermission(user, PERMISSIONS.EDIT_PROJECTS) },
-    { id: 'jobs', href: '/admin/jobs', label: 'Jobs & Applications', show: hasPermission(user, PERMISSIONS.MANAGE_VACANCIES) || hasPermission(user, PERMISSIONS.REVIEW_APPLICATIONS) },
-    { id: 'leads', href: '/admin/leads', label: 'Leads & CRM Queue', show: hasPermission(user, PERMISSIONS.MANAGE_LEADS_CRM) },
-    { id: 'reviews', href: '/admin/reviews', label: 'Reviews & Activity', show: hasPermission(user, PERMISSIONS.PUBLISH_CONTENT) || hasPermission(user, PERMISSIONS.VIEW_AUDIT) },
-    { id: 'analytics', href: '/admin/analytics', label: 'Analytics & Reports', show: hasPermission(user, PERMISSIONS.VIEW_ANALYTICS) || hasPermission(user, PERMISSIONS.MANAGE_LEADS_CRM) },
-    { id: 'settings', href: '/admin/settings', label: 'Users, Settings & Backups', show: hasPermission(user, PERMISSIONS.MANAGE_USERS) || hasPermission(user, PERMISSIONS.MANAGE_SETTINGS) },
-  ].filter((n) => n.show);
+export function renderAdminShell({ title, subtitle = '', user, csrfToken, currentSection, bodyHtml, nonce = '', flash = '' }) {
+  const navGroups = [
+    {
+      label: 'Overview',
+      items: [
+        { id: 'overview', href: '/admin/', label: 'Dashboard', show: true },
+      ],
+    },
+    {
+      label: 'Website Management',
+      items: [
+        { id: 'pages', href: '/admin/pages', label: 'Pages & Content', show: hasPermission(user, PERMISSIONS.VIEW_CONTENT) || hasPermission(user, PERMISSIONS.EDIT_CONTENT) },
+        { id: 'projects', href: '/admin/projects', label: 'Projects & Media', show: hasPermission(user, PERMISSIONS.EDIT_PROJECTS) || hasPermission(user, PERMISSIONS.UPLOAD_PROJECT_MEDIA) || hasPermission(user, PERMISSIONS.PUBLISH_PROJECTS) },
+        { id: 'campaigns', href: '/admin/campaigns', label: 'Seasonal Campaigns', show: hasPermission(user, PERMISSIONS.MANAGE_CAMPAIGNS) || hasPermission(user, PERMISSIONS.PUBLISH_CAMPAIGNS) },
+      ],
+    },
+    {
+      label: 'Business Operations',
+      items: [
+        { id: 'leads', href: '/admin/leads', label: 'Leads & CRM Queue', show: hasPermission(user, PERMISSIONS.MANAGE_LEADS_CRM) },
+        { id: 'jobs', href: '/admin/jobs', label: 'Careers & Applications', show: hasPermission(user, PERMISSIONS.MANAGE_VACANCIES) || hasPermission(user, PERMISSIONS.REVIEW_APPLICATIONS) },
+      ],
+    },
+    {
+      label: 'Monitoring',
+      items: [
+        { id: 'analytics', href: '/admin/analytics', label: 'Analytics & Reports', show: hasPermission(user, PERMISSIONS.VIEW_ANALYTICS) || hasPermission(user, PERMISSIONS.MANAGE_LEADS_CRM) },
+        { id: 'reviews', href: '/admin/reviews', label: 'Reviews & Activity', show: hasPermission(user, PERMISSIONS.APPROVE_CONTENT) || hasPermission(user, PERMISSIONS.PUBLISH_CONTENT) || hasPermission(user, PERMISSIONS.VIEW_AUDIT) },
+      ],
+    },
+    {
+      label: 'Administration',
+      items: [
+        { id: 'users', href: '/admin/users', label: 'Users & Roles', show: hasPermission(user, PERMISSIONS.MANAGE_USERS) },
+        { id: 'settings', href: '/admin/settings', label: 'Settings & Backups', show: hasPermission(user, PERMISSIONS.MANAGE_USERS) || hasPermission(user, PERMISSIONS.MANAGE_SETTINGS) || hasPermission(user, PERMISSIONS.MANAGE_BACKUPS) },
+      ],
+    },
+  ]
+    .map((group) => ({ ...group, items: group.items.filter((i) => i.show) }))
+    .filter((group) => group.items.length > 0);
+
+  const userRoles = getUserRoles(user);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -271,28 +346,37 @@ export function renderAdminShell({ title, user, csrfToken, currentSection, bodyH
   <a href="#admin-main" class="skip-link">Skip to dashboard content</a>
   <div class="admin-shell">
     <aside class="admin-sidebar">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+      <div class="admin-sidebar__header">
         <div>
           <div class="admin-sidebar__brand">Service Maintenance</div>
           <div class="admin-sidebar__role">
             <strong>${escapeHtml(user.full_name)}</strong><br>
-            <span>${escapeHtml(user.role)}</span>
+            <span>${escapeHtml(userRoles.map(getRoleDisplayLabel).join(' + '))}</span>
           </div>
         </div>
         <button type="button" id="admin-nav-toggle" class="btn btn--ghost-light admin-mobile-toggle" aria-expanded="false" aria-controls="admin-nav-panel">Menu</button>
       </div>
-      <nav id="admin-nav-panel" class="admin-nav-panel" aria-label="Staff dashboard navigation">
-        <ul class="admin-nav">
-          ${nav
+      <nav id="admin-nav-panel" class="admin-nav-panel" aria-label="Staff workspace">
+        <div class="admin-nav-groups">
+          ${navGroups
             .map(
-              (n) =>
-                `<li><a href="${escapeHtml(n.href)}"${currentSection === n.id ? ' aria-current="page"' : ''}>${escapeHtml(n.label)}</a></li>`
+              (group) => `<section class="admin-nav-group">
+                <div class="admin-nav-group__label">${escapeHtml(group.label)}</div>
+                <ul class="admin-nav">
+                  ${group.items
+                    .map(
+                      (n) =>
+                        `<li><a href="${escapeHtml(n.href)}"${currentSection === n.id ? ' aria-current="page"' : ''}>${escapeHtml(n.label)}</a></li>`
+                    )
+                    .join('')}
+                </ul>
+              </section>`
             )
             .join('')}
-        </ul>
+        </div>
       </nav>
-      <div style="margin-top:2rem;padding-top:1rem;border-top:1px solid rgba(244,240,232,0.2);display:flex;flex-direction:column;gap:0.5rem;">
-        <a href="/" style="color:#EAE4D9;font-size:0.88rem;min-height:44px;display:inline-flex;align-items:center;">View Public Site &rarr;</a>
+      <div class="admin-sidebar__footer">
+        <a href="/" class="admin-sidebar__public-link">View Public Site &rarr;</a>
         <form method="POST" action="/admin/logout">
           <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
           <button type="submit" class="btn btn--ghost-light" style="width:100%;font-size:0.85rem;">Sign out</button>
@@ -301,10 +385,15 @@ export function renderAdminShell({ title, user, csrfToken, currentSection, bodyH
     </aside>
 
     <main id="admin-main" class="admin-main" tabindex="-1">
-      <div class="admin-topbar">
-        <h1 style="margin:0;font-size:clamp(1.4rem,2.4vw,2rem);">${escapeHtml(title)}</h1>
-        <span class="muted" style="font-size:0.85rem;">Business Timezone: America/Phoenix &middot; Snapshot ${escapeHtml(formatPhoenixDateTime(new Date(), false))}</span>
-      </div>
+      <header class="admin-topbar">
+        <div class="admin-topbar__title-group">
+          <h1>${escapeHtml(title)}</h1>
+          ${subtitle ? `<p class="admin-topbar__subtitle">${escapeHtml(subtitle)}</p>` : ''}
+        </div>
+        <div class="admin-topbar__meta">
+          <span class="admin-meta-pill">America/Phoenix &middot; ${escapeHtml(formatPhoenixDateTime(new Date(), false))}</span>
+        </div>
+      </header>
       <div id="admin-toast-region" role="region" aria-label="Notifications">
         <div id="admin-inline-alert" class="admin-inline-alert" hidden tabindex="-1" role="status" aria-live="polite">
           <span id="admin-inline-alert-text"></span>
@@ -322,7 +411,7 @@ export function renderAdminShell({ title, user, csrfToken, currentSection, bodyH
   </div>
 
   <dialog id="admin-confirm-dialog" aria-labelledby="admin-confirm-title">
-    <h2 id="admin-confirm-title" style="margin-top:0;">Confirm Action</h2>
+    <h1 id="admin-confirm-title" style="margin-top:0;font-size:1.35rem;">Confirm Action</h1>
     <p id="admin-confirm-message" style="margin-bottom:0.75rem;"></p>
     <div id="admin-confirm-details" class="panel panel--light" style="margin-bottom:1rem;font-size:0.88rem;" hidden></div>
     <div style="display:flex;justify-content:flex-end;gap:0.65rem;flex-wrap:wrap;">
@@ -337,35 +426,46 @@ export function renderAdminShell({ title, user, csrfToken, currentSection, bodyH
 </html>`;
 }
 
-export function renderAdminOverview({ user, stats, schedulerHealth, recentAudit, pendingReviews }) {
+export function renderAdminOverview({ user, stats, schedulerHealth, recentAudit, pendingReviews, rolePermissionMap = {} }) {
+  const userRoles = getUserRoles(user);
+  const permLabelByKey = Object.fromEntries(PERMISSION_META.map((p) => [p.key, p.label]));
+  const effectivePerms = Array.from(
+    new Set(userRoles.flatMap((r) => rolePermissionMap[r] || []))
+  );
+
   return `
   <div class="kpi-grid">
     ${
       stats.showContent
-        ? `<div class="kpi-card"><span class="kpi-card__num">${stats.livePages}</span><span class="kpi-card__label">Live Public Pages</span></div>
-           <div class="kpi-card"><span class="kpi-card__num">${stats.inReviewCount}</span><span class="kpi-card__label">Items In Review</span></div>`
+        ? `<div class="kpi-card"><span class="kpi-card__num">${stats.livePages}</span><span class="kpi-card__label">Live Public Pages</span><span class="kpi-card__hint">Published website routes</span></div>
+           <div class="kpi-card kpi-card--accent"><span class="kpi-card__num">${stats.inReviewCount}</span><span class="kpi-card__label">Pages In Review</span><span class="kpi-card__hint">Awaiting publisher sign-off</span></div>`
         : ''
     }
     ${
       stats.showCampaigns
-        ? `<div class="kpi-card"><span class="kpi-card__num">${stats.liveCampaigns}</span><span class="kpi-card__label">Live Seasonal Campaigns</span></div>`
+        ? `<div class="kpi-card"><span class="kpi-card__num">${stats.liveCampaigns}</span><span class="kpi-card__label">Live Seasonal Campaigns</span><span class="kpi-card__hint">Active in America/Phoenix</span></div>`
         : ''
     }
     ${
       stats.showProjects
-        ? `<div class="kpi-card"><span class="kpi-card__num">${stats.liveProjects}</span><span class="kpi-card__label">Published Projects</span></div>`
+        ? `<div class="kpi-card"><span class="kpi-card__num">${stats.liveProjects}</span><span class="kpi-card__label">Published Projects</span><span class="kpi-card__hint">Approved public proof</span></div>`
         : ''
     }
     ${
       stats.showHiring
-        ? `<div class="kpi-card"><span class="kpi-card__num">${stats.openJobs}</span><span class="kpi-card__label">Open Vacancies</span></div>
-           <div class="kpi-card"><span class="kpi-card__num">${stats.unassignedApps}</span><span class="kpi-card__label">Applications Awaiting Review</span></div>`
+        ? `<div class="kpi-card"><span class="kpi-card__num">${stats.openJobs}</span><span class="kpi-card__label">Open Vacancies</span><span class="kpi-card__hint">Active Careers postings</span></div>
+           <div class="kpi-card kpi-card--accent"><span class="kpi-card__num">${stats.unassignedApps}</span><span class="kpi-card__label">Applications Received</span><span class="kpi-card__hint">Isolated recruiting queue</span></div>`
         : ''
     }
     ${
       stats.showLeads
-        ? `<div class="kpi-card"><span class="kpi-card__num">${stats.newInquiries}</span><span class="kpi-card__label">Total Inquiries</span></div>
-           <div class="kpi-card"><span class="kpi-card__num">${stats.crmFailed}</span><span class="kpi-card__label">CRM Delivery Failures</span></div>`
+        ? `<div class="kpi-card"><span class="kpi-card__num">${stats.newInquiries}</span><span class="kpi-card__label">Total Inquiries</span><span class="kpi-card__hint">Durable commercial ledger</span></div>
+           <div class="kpi-card kpi-card--accent"><span class="kpi-card__num">${stats.crmFailed}</span><span class="kpi-card__label">CRM Delivery Failures</span><span class="kpi-card__hint">Requires replay or review</span></div>`
+        : ''
+    }
+    ${
+      stats.showAnalytics
+        ? `<div class="kpi-card"><span class="kpi-card__num">${stats.analyticsEvents || 0}</span><span class="kpi-card__label">First-Party Events</span><span class="kpi-card__hint">PII-scrubbed measurements</span></div>`
         : ''
     }
   </div>
@@ -375,16 +475,23 @@ export function renderAdminOverview({ user, stats, schedulerHealth, recentAudit,
       <h2>Scheduler &amp; Delivery Health</h2>
       <p><strong>Scheduler Status:</strong> <span class="badge ${schedulerHealth?.status === 'healthy' ? 'badge--live' : 'badge--warn'}">${escapeHtml(schedulerHealth?.status || 'ready')}</span></p>
       <p><strong>Last Successful Sweep:</strong> ${escapeHtml(formatPhoenixDateTime(schedulerHealth?.last_success_at))}</p>
-      <p class="muted" style="font-size:0.86rem;margin-bottom:0;">Note: Reporting widgets reflect stored database state as of page render (not real-time streaming).</p>
+      <p class="muted" style="font-size:0.85rem;margin-bottom:0;">Note: Reporting widgets reflect stored database state as of page render (not real-time streaming).</p>
     </section>
 
     <section class="admin-card">
-      <h2>Role Scope &amp; Boundaries</h2>
-      <p>Signed in as <strong>${escapeHtml(user.role)}</strong>.</p>
-      <ul style="font-size:0.9rem;">
+      <h2>Role Scope &amp; Effective Boundaries</h2>
+      <p style="margin-bottom:0.55rem;">Signed in as <strong>${escapeHtml(userRoles.map(getRoleDisplayLabel).join(' + '))}</strong>.</p>
+      <ul style="font-size:0.89rem;margin-bottom:0.75rem;">
         <li>All permissions are enforced server-side on every route, record, export, and download.</li>
         <li>${stats.showHiring ? 'You have authorized access to assigned recruiting records.' : 'Hiring records and applicant resumes are isolated and restricted from your role.'}</li>
       </ul>
+      ${
+        effectivePerms.length > 0
+          ? `<div class="perm-chip-list" aria-label="Effective permissions">
+              ${effectivePerms.map((p) => `<span class="perm-chip" title="${escapeHtml(p)}">${escapeHtml(permLabelByKey[p] || p)}</span>`).join('')}
+            </div>`
+          : ''
+      }
     </section>
   </div>
 
@@ -394,11 +501,11 @@ export function renderAdminOverview({ user, stats, schedulerHealth, recentAudit,
           <h2>Items Awaiting Review</h2>
           <div class="table-scroll" tabindex="0" role="region" aria-label="Items Awaiting Review">
             <table class="data-table">
-              <thead><tr><th>Type</th><th>Title</th><th>Owner</th><th>Updated</th></tr></thead>
+              <thead><tr><th scope="col">Type</th><th scope="col">Title</th><th scope="col">Owner</th><th scope="col">Updated (Phoenix)</th></tr></thead>
               <tbody>
                 ${pendingReviews
                   .map(
-                    (r) => `<tr><td>${escapeHtml(r.type)}</td><td><a href="${escapeHtml(r.href)}">${escapeHtml(r.title)}</a></td><td>${escapeHtml(r.owner)}</td><td>${escapeHtml(formatPhoenixDateTime(r.updated_at, false))}</td></tr>`
+                    (r) => `<tr><td><span class="badge badge--warn">${escapeHtml(r.type)}</span></td><td><a href="${escapeHtml(r.href)}">${escapeHtml(r.title)}</a></td><td>${escapeHtml(r.owner)}</td><td>${escapeHtml(formatPhoenixDateTime(r.updated_at, false))}</td></tr>`
                   )
                   .join('')}
               </tbody>
@@ -414,11 +521,11 @@ export function renderAdminOverview({ user, stats, schedulerHealth, recentAudit,
           <h2>Recent Non-Hiring Activity</h2>
           <div class="table-scroll" tabindex="0" role="region" aria-label="Recent Non-Hiring Activity">
             <table class="data-table">
-              <thead><tr><th>Time (Phoenix)</th><th>Actor</th><th>Domain</th><th>Action</th><th>Object</th></tr></thead>
+              <thead><tr><th scope="col">Time (Phoenix)</th><th scope="col">Actor</th><th scope="col">Domain</th><th scope="col">Action</th><th scope="col">Object</th></tr></thead>
               <tbody>
                 ${recentAudit
                   .map(
-                    (a) => `<tr><td>${escapeHtml(formatPhoenixDateTime(a.created_at, false))}</td><td>${escapeHtml(a.actor_name)}</td><td>${escapeHtml(a.domain)}</td><td>${escapeHtml(a.action)}</td><td><code>${escapeHtml(a.object_type)}:${escapeHtml(a.object_id.slice(0, 12))}</code></td></tr>`
+                    (a) => `<tr><td>${escapeHtml(formatPhoenixDateTime(a.created_at, false))}</td><td>${escapeHtml(a.actor_name)}</td><td><span class="badge">${escapeHtml(a.domain)}</span></td><td>${escapeHtml(a.action)}</td><td><code>${escapeHtml(a.object_type)}:${escapeHtml(a.object_id.slice(0, 12))}</code></td></tr>`
                   )
                   .join('')}
               </tbody>
@@ -445,17 +552,18 @@ export function renderAdminPagesView({
   csrfToken,
 }) {
   const canPublish = hasPermission(user, PERMISSIONS.PUBLISH_CONTENT);
+  const canApprove = hasPermission(user, PERMISSIONS.APPROVE_CONTENT) || canPublish;
   const canEdit = hasPermission(user, PERMISSIONS.EDIT_CONTENT);
 
   return `
   <section class="admin-card">
-    <form method="GET" action="/admin/pages" style="display:flex;flex-wrap:wrap;gap:0.65rem;align-items:flex-end;">
-      <div class="field" style="margin:0;flex:1;min-width:13rem;">
+    <form method="GET" action="/admin/pages" class="admin-filter-bar" style="margin-bottom:0;">
+      <div class="field" style="flex:1;min-width:14rem;">
         <label for="cms-q">Search pages, articles &amp; claims</label>
-        <input id="cms-q" name="q" type="search" value="${escapeHtml(filters.q || '')}" placeholder="Search slug, title, text...">
+        <input id="cms-q" name="q" type="search" value="${escapeHtml(filters.q || '')}" placeholder="Search slug, title, owner, text...">
       </div>
-      <div class="field" style="margin:0;min-width:11rem;">
-        <label for="cms-state">Page State</label>
+      <div class="field" style="min-width:11rem;">
+        <label for="cms-state">Editorial / Public State</label>
         <select id="cms-state" name="state">
           <option value="">All states</option>
           ${['Draft', 'In review', 'Approved', 'Live', 'Unpublished']
@@ -463,28 +571,46 @@ export function renderAdminPagesView({
             .join('')}
         </select>
       </div>
-      <button type="submit" class="btn btn--secondary">Filter</button>
-      ${filters.q || filters.state ? '<a href="/admin/pages" class="btn btn--secondary">Clear</a>' : ''}
+      <div class="admin-action-group">
+        <button type="submit" class="btn btn--secondary">Filter</button>
+        ${filters.q || filters.state ? '<a href="/admin/pages" class="btn btn--secondary">Clear</a>' : ''}
+      </div>
     </form>
   </section>
 
   <div class="admin-split">
     <section class="admin-card">
-      <h2>Website Pages</h2>
+      <div class="admin-card__header">
+        <div>
+          <h2>Website Pages</h2>
+          <p class="muted" style="margin:0;font-size:0.84rem;">Select a route to edit draft copy, inspect SEO fields, compare revisions, or preview.</p>
+        </div>
+      </div>
       ${
         pages.length === 0
-          ? '<p class="muted">No pages match your search/filter.</p>'
+          ? '<div class="admin-empty-state">No pages match your current search or state filter.</div>'
           : `<div class="table-scroll" tabindex="0" role="region" aria-label="Website Pages Table">
-              <table class="data-table">
-                <thead><tr><th>Route</th><th>Editorial</th><th>Public State</th><th>Rev</th></tr></thead>
+              <table class="data-table" style="font-size:0.86rem;">
+                <thead><tr><th scope="col">Route &amp; Title</th><th scope="col">Owner</th><th scope="col">State</th><th scope="col">Rev / Updated</th></tr></thead>
                 <tbody>
                   ${pages
                     .map(
-                      (p) => `<tr>
-                        <td><a href="/admin/pages?id=${encodeURIComponent(p.page_id)}">${escapeHtml(p.slug)}</a></td>
-                        <td><span class="badge">${escapeHtml(p.editorial_state)}</span></td>
-                        <td><span class="badge ${p.activation_state === 'Live' ? 'badge--live' : 'badge--warn'}">${escapeHtml(p.activation_state)}</span></td>
-                        <td>v${escapeHtml(p.current_revision)} (pub: ${p.published_revision ? `v${p.published_revision}` : 'none'})</td>
+                      (p) => `<tr class="${selectedPage?.page_id === p.page_id ? 'is-selected' : ''}">
+                        <td>
+                          <a href="/admin/pages?id=${encodeURIComponent(p.page_id)}"><strong>${escapeHtml(p.slug)}</strong></a>
+                          <div class="muted" style="font-size:0.78rem;">${escapeHtml(p.title)}</div>
+                        </td>
+                        <td>${escapeHtml(p.owner_name)}</td>
+                        <td>
+                          <div class="admin-action-group">
+                            <span class="badge">${escapeHtml(p.editorial_state)}</span>
+                            <span class="badge ${p.activation_state === 'Live' ? 'badge--live' : 'badge--warn'}">${escapeHtml(p.activation_state)}</span>
+                          </div>
+                        </td>
+                        <td>
+                          v${escapeHtml(p.current_revision)} (pub: ${p.published_revision ? `v${p.published_revision}` : 'none'})<br>
+                          <small class="muted">${escapeHtml(formatPhoenixDateTime(p.updated_at, false))}</small>
+                        </td>
                       </tr>`
                     )
                     .join('')}
@@ -509,46 +635,67 @@ export function renderAdminPagesView({
               { key: 'body_html', label: 'Body HTML' },
             ];
             return `<section class="admin-card">
-              <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-                <h2 style="margin:0;">Edit: ${escapeHtml(selectedPage.slug)}</h2>
-                <span id="autosave-status" class="autosave-pill">Idle</span>
+              <div class="admin-card__header">
+                <h2 style="margin:0;">Edit: ${escapeHtml(selectedPage.slug)} (${escapeHtml(selectedPage.editorial_state)})</h2>
+                <span id="autosave-status" class="autosave-pill">${canEdit ? 'Saved' : 'Read-only'}</span>
               </div>
+              ${
+                !canEdit
+                  ? `<div class="status-banner status-banner--warning" role="status"><strong>Read-Only View:</strong> Your current role can inspect pages and preview revisions but cannot modify page content.</div>`
+                  : ''
+              }
+              ${
+                latest.review_comment && selectedPage.editorial_state === 'Draft'
+                  ? `<div class="status-banner status-banner--warning" role="status"><strong>Returned from Review (v${escapeHtml(latest.revision_number)}):</strong> ${escapeHtml(latest.review_comment)}</div>`
+                  : ''
+              }
               <p class="muted" style="font-size:0.86rem;">Current revision: v${escapeHtml(selectedPage.current_revision)} | Published revision: ${selectedPage.published_revision ? `v${selectedPage.published_revision}` : 'Unpublished'}</p>
 
               <form id="page-editor-form" data-autosave-url="/admin/api/pages/${escapeHtml(selectedPage.page_id)}/draft">
                 <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
                 <input type="hidden" name="expected_revision" value="${escapeHtml(selectedPage.current_revision)}">
 
-                <div class="field">
-                  <label for="pg-title">Page Title</label>
-                  <input type="text" id="pg-title" name="title" value="${escapeHtml(latest.title)}" required ${canEdit ? '' : 'disabled'}>
-                </div>
-                <div class="field">
-                  <label for="pg-meta-title">SEO Meta Title</label>
-                  <input type="text" id="pg-meta-title" name="meta_title" value="${escapeHtml(latest.meta_title)}" required ${canEdit ? '' : 'disabled'}>
-                </div>
-                <div class="field">
-                  <label for="pg-meta-desc">SEO Meta Description</label>
-                  <textarea id="pg-meta-desc" name="meta_description" style="min-height:4.5rem;" ${canEdit ? '' : 'disabled'}>${escapeHtml(latest.meta_description)}</textarea>
-                </div>
-                <div class="field">
-                  <label for="pg-headline">Hero Headline</label>
-                  <input type="text" id="pg-headline" name="hero_headline" value="${escapeHtml(latest.hero_headline)}" required ${canEdit ? '' : 'disabled'}>
-                </div>
-                <div class="field">
-                  <label for="pg-summary">Hero Summary</label>
-                  <textarea id="pg-summary" name="hero_summary" style="min-height:4.5rem;" ${canEdit ? '' : 'disabled'}>${escapeHtml(latest.hero_summary)}</textarea>
-                </div>
-                <div class="field">
-                  <label for="pg-cta">Primary CTA Label</label>
-                  <input type="text" id="pg-cta" name="cta_label" value="${escapeHtml(latest.cta_label)}" ${canEdit ? '' : 'disabled'}>
-                </div>
-                <div class="field">
-                  <label for="pg-body">Body Content (Sanitized Rich HTML)</label>
-                  <textarea id="pg-body" name="body_html" style="min-height:10rem;" ${canEdit ? '' : 'disabled'}>${escapeHtml(latest.body_html)}</textarea>
-                </div>
+                <fieldset class="admin-fieldset">
+                  <legend>Page Content &amp; Messaging</legend>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label for="pg-title">Page Title</label>
+                      <input type="text" id="pg-title" name="title" value="${escapeHtml(latest.title)}" required ${canEdit ? '' : 'disabled'}>
+                    </div>
+                    <div class="field">
+                      <label for="pg-cta">Primary CTA Label</label>
+                      <input type="text" id="pg-cta" name="cta_label" value="${escapeHtml(latest.cta_label)}" ${canEdit ? '' : 'disabled'}>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label for="pg-headline">Hero Headline</label>
+                    <input type="text" id="pg-headline" name="hero_headline" value="${escapeHtml(latest.hero_headline)}" required ${canEdit ? '' : 'disabled'}>
+                  </div>
+                  <div class="field">
+                    <label for="pg-summary">Hero Summary</label>
+                    <textarea id="pg-summary" name="hero_summary" style="min-height:4.2rem;" ${canEdit ? '' : 'disabled'}>${escapeHtml(latest.hero_summary)}</textarea>
+                  </div>
+                  <div class="field" style="margin-bottom:0;">
+                    <label for="pg-body">Body Content (Sanitized Rich HTML)</label>
+                    <textarea id="pg-body" name="body_html" style="min-height:10rem;" ${canEdit ? '' : 'disabled'}>${escapeHtml(latest.body_html)}</textarea>
+                  </div>
+                </fieldset>
 
-                <div style="display:flex;flex-wrap:wrap;gap:0.6rem;">
+                <fieldset class="admin-fieldset">
+                  <legend>SEO &amp; Search Visibility</legend>
+                  <div class="field">
+                    <label for="pg-meta-title">SEO Meta Title</label>
+                    <span class="hint" id="meta-title-count">0 / 60 recommended chars</span>
+                    <input type="text" id="pg-meta-title" name="meta_title" value="${escapeHtml(latest.meta_title)}" data-char-target="meta-title-count" data-char-rec="60" aria-describedby="meta-title-count" required ${canEdit ? '' : 'disabled'}>
+                  </div>
+                  <div class="field" style="margin-bottom:0;">
+                    <label for="pg-meta-desc">SEO Meta Description</label>
+                    <span class="hint" id="meta-desc-count">0 / 160 recommended chars</span>
+                    <textarea id="pg-meta-desc" name="meta_description" data-char-target="meta-desc-count" data-char-rec="160" aria-describedby="meta-desc-count" style="min-height:4.2rem;" ${canEdit ? '' : 'disabled'}>${escapeHtml(latest.meta_description)}</textarea>
+                  </div>
+                </fieldset>
+
+                <div class="admin-action-group">
                   ${
                     canEdit
                       ? `<button type="button" class="btn btn--secondary" id="btn-save-draft">Save Draft</button>
@@ -559,11 +706,24 @@ export function renderAdminPagesView({
                   <a href="/admin/preview?path=${encodeURIComponent(selectedPage.slug)}&rev=${encodeURIComponent(latest.revision_number)}&viewport=mobile" target="_blank" class="btn btn--secondary">Preview Mobile (390px)</a>
                   ${
                     canPublish
-                      ? `<button type="button" class="btn btn--primary" id="btn-publish-page" data-url="/admin/api/pages/${escapeHtml(selectedPage.page_id)}/publish">Approve &amp; Publish Live</button>`
+                      ? `<button type="button" class="btn btn--primary" id="btn-publish-page" data-url="/admin/api/pages/${escapeHtml(selectedPage.page_id)}/publish" data-confirm="Approve draft v${escapeHtml(selectedPage.current_revision)} for ${escapeHtml(selectedPage.slug)} and publish it live immediately?">Approve &amp; Publish Live</button>`
                       : ''
                   }
                 </div>
               </form>
+
+              ${
+                canApprove && selectedPage.editorial_state === 'In review'
+                  ? `<form method="POST" action="/admin/api/pages/${escapeHtml(selectedPage.page_id)}/return-draft" class="js-ajax-form admin-filter-bar" style="margin-top:1rem;" data-confirm-title="Return Revision to Draft?" data-confirm="Send revision v${escapeHtml(selectedPage.current_revision)} back to Draft with your reviewer comment?">
+                      <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+                      <div class="field" style="flex:1;min-width:14rem;">
+                        <label for="pg-ret-comment">Return to Draft Review Comment</label>
+                        <input type="text" id="pg-ret-comment" name="review_comment" placeholder="Explain required edits before publishing..." required>
+                      </div>
+                      <button type="submit" class="btn btn--secondary">Return to Draft</button>
+                    </form>`
+                  : ''
+              }
 
               <h3 style="margin-top:1.75rem;">Revision Comparison</h3>
               <form method="GET" action="/admin/pages" style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end;margin-bottom:0.75rem;">
@@ -648,10 +808,12 @@ export function renderAdminPagesView({
                       (a) => `<tr>
                         <td><a href="/admin/pages?article=${encodeURIComponent(a.article_id)}">${escapeHtml(a.title)}</a><br><small class="muted"><code>/insights/${escapeHtml(a.slug)}/</code> &middot; ${escapeHtml(a.buyer_target)}</small></td>
                         <td><span class="badge">${escapeHtml(a.editorial_state)}</span> <span class="badge ${a.activation_state === 'Live' ? 'badge--live' : 'badge--warn'}">${escapeHtml(a.activation_state)}</span></td>
-                        <td style="display:flex;gap:0.35rem;flex-wrap:wrap;">
-                          ${canEdit && a.editorial_state === 'Draft' ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.2rem 0.5rem;font-size:0.78rem;" data-url="/admin/api/articles/${escapeHtml(a.article_id)}/submit-review">Submit Review</button>` : ''}
-                          ${canPublish && a.activation_state !== 'Live' ? `<button type="button" class="btn btn--primary js-action-btn" style="min-height:34px;padding:0.2rem 0.5rem;font-size:0.78rem;" data-url="/admin/api/articles/${escapeHtml(a.article_id)}/publish">Publish</button>` : ''}
-                          ${canPublish && a.activation_state === 'Live' ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.2rem 0.5rem;font-size:0.78rem;" data-url="/admin/api/articles/${escapeHtml(a.article_id)}/archive">Archive</button>` : ''}
+                        <td>
+                          <div class="admin-action-group">
+                            ${canEdit && a.editorial_state === 'Draft' ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.2rem 0.5rem;font-size:0.78rem;" data-url="/admin/api/articles/${escapeHtml(a.article_id)}/submit-review">Submit Review</button>` : ''}
+                            ${canPublish && a.activation_state !== 'Live' ? `<button type="button" class="btn btn--primary js-action-btn" style="min-height:34px;padding:0.2rem 0.5rem;font-size:0.78rem;" data-url="/admin/api/articles/${escapeHtml(a.article_id)}/publish" data-confirm-title="Publish Article Live?" data-confirm="Publish &quot;${escapeHtml(a.title)}&quot; to /insights/${escapeHtml(a.slug)}/?">Publish</button>` : ''}
+                            ${canPublish && a.activation_state === 'Live' ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.2rem 0.5rem;font-size:0.78rem;" data-url="/admin/api/articles/${escapeHtml(a.article_id)}/archive" data-confirm-title="Archive Article?" data-confirm="Archive &quot;${escapeHtml(a.title)}&quot; and remove it from public listings?">Archive</button>` : ''}
+                          </div>
                         </td>
                       </tr>`
                     )
@@ -701,9 +863,11 @@ export function renderAdminPagesView({
                 (c) => `<tr>
                   <td><a href="/admin/pages?claim=${encodeURIComponent(c.claim_id)}"><strong>${escapeHtml(c.title)}</strong></a><br><span class="muted">${escapeHtml(c.exact_text)}</span><br><small class="muted">${escapeHtml(c.claim_type)} &middot; Source: ${escapeHtml(c.evidence_source)}</small></td>
                   <td><span class="badge ${c.status === 'withdrawn' ? 'badge--err' : c.status === 'established company fact' || c.status === 'approved for publication' ? 'badge--live' : 'badge--warn'}">${escapeHtml(c.status)}</span></td>
-                  <td style="display:flex;gap:0.35rem;flex-wrap:wrap;">
-                    ${canPublish && c.status !== 'approved for publication' && c.status !== 'established company fact' ? `<button type="button" class="btn btn--primary js-action-btn" style="min-height:34px;padding:0.2rem 0.5rem;font-size:0.78rem;" data-url="/admin/api/claims/${escapeHtml(c.claim_id)}/approve">Approve</button>` : ''}
-                    ${canPublish && c.status !== 'withdrawn' ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.2rem 0.5rem;font-size:0.78rem;" data-url="/admin/api/claims/${escapeHtml(c.claim_id)}/withdraw">Withdraw</button>` : ''}
+                  <td>
+                    <div class="admin-action-group">
+                      ${canApprove && c.status !== 'approved for publication' && c.status !== 'established company fact' ? `<button type="button" class="btn btn--primary js-action-btn" style="min-height:34px;padding:0.2rem 0.5rem;font-size:0.78rem;" data-url="/admin/api/claims/${escapeHtml(c.claim_id)}/approve">Approve</button>` : ''}
+                      ${canPublish && c.status !== 'withdrawn' ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.2rem 0.5rem;font-size:0.78rem;" data-url="/admin/api/claims/${escapeHtml(c.claim_id)}/withdraw" data-confirm-title="Withdraw Factual Claim / Testimonial?" data-confirm="Withdrawing immediately stops public display of &quot;${escapeHtml(c.title)}&quot;.">Withdraw</button>` : ''}
+                    </div>
                   </td>
                 </tr>`
               )
@@ -966,7 +1130,7 @@ export function renderAdminCampaignsView({
                               }
                               ${
                                 canPublish && c.activation_state !== 'Archived'
-                                  ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:36px;padding:0.25rem 0.6rem;font-size:0.8rem;" data-url="/admin/api/campaigns/${escapeHtml(c.campaign_id)}/archive">Archive</button>`
+                                  ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:36px;padding:0.25rem 0.6rem;font-size:0.8rem;" data-url="/admin/api/campaigns/${escapeHtml(c.campaign_id)}/archive" data-confirm-title="Archive Campaign?" data-confirm="Archive &quot;${escapeHtml(c.internal_title)}&quot;? Archived campaigns cannot be edited further.">Archive</button>`
                                   : ''
                               }
                             </td>
@@ -1039,6 +1203,7 @@ export function renderAdminCampaignsView({
 export function renderAdminProjectsView({ projects, selectedProject, pairs, galleryItems = [], assets, assetUsageMap = {}, user, csrfToken }) {
   const canPublish = hasPermission(user, PERMISSIONS.PUBLISH_PROJECTS);
   const canEdit = hasPermission(user, PERMISSIONS.EDIT_PROJECTS);
+  const canUploadMedia = hasPermission(user, PERMISSIONS.UPLOAD_PROJECT_MEDIA) || canEdit;
 
   let selectedServices = '';
   if (selectedProject) {
@@ -1101,7 +1266,7 @@ export function renderAdminProjectsView({ projects, selectedProject, pairs, gall
       <h2>Authenticated Project Photo Upload &amp; Rights Registry</h2>
       <p class="muted" style="font-size:0.86rem;">Up to 20 files/batch, 20 MB/image, 64 MP max. Adjust focal points (0–100%) and inspect usages before withdrawing rights.</p>
       ${
-        canEdit
+        canUploadMedia
           ? `<form id="media-upload-form" method="POST" action="/admin/api/media/upload" enctype="multipart/form-data">
               <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
               <div class="field">
@@ -1129,7 +1294,7 @@ export function renderAdminProjectsView({ projects, selectedProject, pairs, gall
                 <span>${escapeHtml(a.width)}&times;${escapeHtml(a.height)} &middot; <span class="badge ${a.rights_status === 'approved' ? 'badge--live' : a.rights_status === 'withdrawn' ? 'badge--err' : 'badge--warn'}">${escapeHtml(a.rights_status)}</span></span>
                 <div class="muted" style="font-size:0.76rem;margin-top:0.2rem;">Focal: ${escapeHtml(a.focal_x ?? 50)}%, ${escapeHtml(a.focal_y ?? 50)}% &middot; Used in ${escapeHtml(usage.total)} placement(s)</div>
                 ${
-                  canEdit
+                  canUploadMedia
                     ? `<form method="POST" action="/admin/api/media/${escapeHtml(a.asset_id)}/focal-point" class="js-ajax-form" style="margin-top:0.45rem;display:flex;gap:0.3rem;flex-wrap:wrap;align-items:center;">
                         <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
                         <label for="fx-${escapeHtml(a.asset_id)}" class="visually-hidden">Focal X percent</label>
@@ -1210,8 +1375,8 @@ export function renderAdminProjectsView({ projects, selectedProject, pairs, gall
               <a href="/admin/preview?project=${encodeURIComponent(selectedProject.slug)}&viewport=mobile" target="_blank" class="btn btn--secondary">Preview Mobile (390px)</a>
               ${
                 canPublish
-                  ? `<button type="button" class="btn btn--primary js-action-btn" data-url="/admin/api/projects/${escapeHtml(selectedProject.project_id)}/publish">Approve &amp; Publish Project</button>
-                     <button type="button" class="btn btn--secondary js-action-btn" data-url="/admin/api/projects/${escapeHtml(selectedProject.project_id)}/archive">Archive Project</button>`
+                  ? `<button type="button" class="btn btn--primary js-action-btn" data-url="/admin/api/projects/${escapeHtml(selectedProject.project_id)}/publish" data-confirm-title="Publish Completed Project?" data-confirm="Publish &quot;${escapeHtml(selectedProject.title)}&quot; and its approved derivatives live to /projects/?">Approve &amp; Publish Project</button>
+                     <button type="button" class="btn btn--secondary js-action-btn" data-url="/admin/api/projects/${escapeHtml(selectedProject.project_id)}/archive" data-confirm-title="Archive Completed Project?" data-confirm="Remove &quot;${escapeHtml(selectedProject.title)}&quot; from public project archives?">Archive Project</button>`
                   : ''
               }
             </div>
@@ -1357,7 +1522,7 @@ export function renderAdminJobsView({
                   ${
                     isOwner && j.status === 'Open'
                       ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:36px;padding:0.25rem 0.6rem;font-size:0.8rem;" data-url="/admin/api/jobs/${escapeHtml(j.requisition_id)}/pause">Pause</button>
-                         <button type="button" class="btn btn--secondary js-action-btn" style="min-height:36px;padding:0.25rem 0.6rem;font-size:0.8rem;" data-url="/admin/api/jobs/${escapeHtml(j.requisition_id)}/close">Close Role</button>`
+                         <button type="button" class="btn btn--secondary js-action-btn" style="min-height:36px;padding:0.25rem 0.6rem;font-size:0.8rem;" data-url="/admin/api/jobs/${escapeHtml(j.requisition_id)}/close" data-confirm-title="Close Job Vacancy?" data-confirm="Closing &quot;${escapeHtml(j.title)}&quot; immediately blocks new applications while preserving previously submitted applicant records.">Close Role</button>`
                       : ''
                   }
                   ${
@@ -1812,6 +1977,440 @@ export function renderAdminAnalyticsView({ summary }) {
   </section>`;
 }
 
+export function renderAdminReviewsView({ pendingItems = [], logs = [], logsMeta = null, filters = {} }) {
+  return `
+  <section class="admin-card">
+    <div class="admin-card__header">
+      <div>
+        <h2>Editorial &amp; Publication Review Queue</h2>
+        <p class="muted" style="margin:0;font-size:0.85rem;">Items marked <strong>In review</strong> or awaiting factual evidence approval. Click any item to inspect or publish.</p>
+      </div>
+      <span class="badge ${pendingItems.length > 0 ? 'badge--warn' : 'badge--live'}">${pendingItems.length} pending</span>
+    </div>
+    ${
+      pendingItems.length === 0
+        ? '<div class="admin-empty-state">All website pages, articles, claims, and projects have cleared review.</div>'
+        : `<div class="table-scroll" tabindex="0" role="region" aria-label="Pending Review Queue">
+            <table class="data-table">
+              <thead><tr><th scope="col">Type</th><th scope="col">Title / Route</th><th scope="col">Owner</th><th scope="col">Updated (Phoenix)</th><th scope="col">Action</th></tr></thead>
+              <tbody>
+                ${pendingItems
+                  .map(
+                    (it) => `<tr>
+                      <td><span class="badge badge--warn">${escapeHtml(it.type)}</span></td>
+                      <td><strong>${escapeHtml(it.title)}</strong></td>
+                      <td>${escapeHtml(it.owner)}</td>
+                      <td>${escapeHtml(formatPhoenixDateTime(it.updated_at, false))}</td>
+                      <td><a href="${escapeHtml(it.href)}" class="btn btn--secondary" style="min-height:36px;padding:0.25rem 0.65rem;font-size:0.8rem;">Open Review &rarr;</a></td>
+                    </tr>`
+                  )
+                  .join('')}
+              </tbody>
+            </table>
+          </div>`
+    }
+  </section>
+
+  <section class="admin-card">
+    <div class="admin-card__header">
+      <div>
+        <h2>Audit Trail (Non-Hiring Operations)</h2>
+        <p class="muted" style="margin:0;font-size:0.85rem;">Recruiting and private applicant logs remain strictly isolated from this operational feed.</p>
+      </div>
+    </div>
+    <form method="GET" action="/admin/reviews" class="admin-filter-bar">
+      <div class="field" style="flex:1;min-width:13rem;">
+        <label for="aud-q">Search actor, action, or object</label>
+        <input id="aud-q" name="q" type="search" value="${escapeHtml(filters.q || '')}" placeholder="Filter audit trail...">
+      </div>
+      <div class="field" style="min-width:11rem;">
+        <label for="aud-domain">Domain</label>
+        <select id="aud-domain" name="domain">
+          <option value="">All domains</option>
+          ${['auth', 'users', 'content', 'campaigns', 'projects', 'media', 'crm', 'notifications', 'settings', 'ops']
+            .map((d) => `<option value="${d}"${filters.domain === d ? ' selected' : ''}>${d}</option>`)
+            .join('')}
+        </select>
+      </div>
+      <div class="admin-action-group">
+        <button type="submit" class="btn btn--secondary">Filter</button>
+        ${filters.domain || filters.q ? '<a href="/admin/reviews" class="btn btn--secondary">Clear</a>' : ''}
+      </div>
+    </form>
+    ${
+      logs.length === 0
+        ? '<div class="admin-empty-state">No non-hiring audit events match your filter criteria.</div>'
+        : `<div class="table-scroll" tabindex="0" role="region" aria-label="Audit Trail Table">
+            <table class="data-table" style="font-size:0.85rem;">
+              <thead><tr><th scope="col">Time (Phoenix)</th><th scope="col">Actor</th><th scope="col">Domain</th><th scope="col">Action</th><th scope="col">Object</th><th scope="col">Details</th></tr></thead>
+              <tbody>
+                ${logs
+                  .map(
+                    (l) => `<tr>
+                      <td>${escapeHtml(formatPhoenixDateTime(l.created_at, false))}</td>
+                      <td>${escapeHtml(l.actor_name)}<br><small class="muted">${escapeHtml(l.actor_role)}</small></td>
+                      <td><span class="badge">${escapeHtml(l.domain)}</span></td>
+                      <td>${escapeHtml(l.action)}</td>
+                      <td><code>${escapeHtml(l.object_type)}:${escapeHtml(l.object_id)}</code></td>
+                      <td><small class="muted">${escapeHtml(l.details_json)}</small></td>
+                    </tr>`
+                  )
+                  .join('')}
+              </tbody>
+            </table>
+          </div>`
+    }
+    ${renderPaginationNav('/admin/reviews', logsMeta, filters)}
+  </section>`;
+}
+
+export function renderAdminUsersView({
+  users = [],
+  allUsers = [],
+  filters = {},
+  selectedUser = null,
+  selectedRoleName = '',
+  userAuditLogs = [],
+  activeSessionsMap = {},
+  lastLoginMap = {},
+  rolePermissionMap = {},
+  user,
+  csrfToken,
+}) {
+  const canManageUsers = hasPermission(user, PERMISSIONS.MANAGE_USERS);
+  const allRoleNames = Object.values(ROLES);
+  const permLabelByKey = Object.fromEntries(PERMISSION_META.map((p) => [p.key, p.label]));
+
+  const activeCount = allUsers.filter((u) => Boolean(u.active)).length;
+  const mfaEnrolledCount = allUsers.filter((u) => Boolean(u.mfa_enabled && u.mfa_enrolled)).length;
+
+  const roleAssignedCounts = Object.fromEntries(allRoleNames.map((r) => [r, 0]));
+  for (const u of allUsers) {
+    for (const r of getUserRoles(u)) {
+      if (roleAssignedCounts[r] !== undefined) roleAssignedCounts[r] += 1;
+    }
+  }
+
+  const activeRoleDetail = allRoleNames.includes(selectedRoleName) ? selectedRoleName : allRoleNames[0];
+  const roleUsers = allUsers.filter((u) => getUserRoles(u).includes(activeRoleDetail));
+
+  const renderRoleCheckboxes = (idPrefix, selectedExtraRoles = [], currentPrimaryRole = '') => `
+    <div class="role-checkbox-grid">
+      ${allRoleNames
+        .map((roleName, idx) => {
+          const checked = selectedExtraRoles.includes(roleName);
+          const isPrimary = currentPrimaryRole === roleName;
+          const cid = `${idPrefix}-${idx}`;
+          return `<label class="role-checkbox-card" for="${escapeHtml(cid)}">
+            <input type="checkbox" id="${escapeHtml(cid)}" name="extra_roles" value="${escapeHtml(roleName)}" data-checkbox-array="true"${checked ? ' checked' : ''}>
+            <span>
+              <span class="role-checkbox-card__title">${escapeHtml(getRoleDisplayLabel(roleName))}${isPrimary ? ' <span class="badge">Primary</span>' : ''}</span>
+              <span class="role-checkbox-card__desc">${escapeHtml((ROLE_DESCRIPTIONS[roleName] || '').slice(0, 78))}...</span>
+            </span>
+          </label>`;
+        })
+        .join('')}
+    </div>`;
+
+  return `
+  <div class="kpi-grid">
+    <div class="kpi-card"><span class="kpi-card__num">${allUsers.length}</span><span class="kpi-card__label">Staff Accounts</span><span class="kpi-card__hint">Named individual identities</span></div>
+    <div class="kpi-card"><span class="kpi-card__num">${activeCount}</span><span class="kpi-card__label">Active Accounts</span><span class="kpi-card__hint">${allUsers.length - activeCount} revoked / inactive</span></div>
+    <div class="kpi-card"><span class="kpi-card__num">${allRoleNames.length}</span><span class="kpi-card__label">PRD Roles</span><span class="kpi-card__hint">Multi-role combination supported</span></div>
+    <div class="kpi-card kpi-card--accent"><span class="kpi-card__num">${mfaEnrolledCount}</span><span class="kpi-card__label">TOTP Enrolled</span><span class="kpi-card__hint">${allUsers.length - mfaEnrolledCount} pending setup</span></div>
+  </div>
+
+  <section class="admin-card">
+    <div class="admin-card__header">
+      <div>
+        <h2>Staff Directory</h2>
+        <p class="muted" style="margin:0;font-size:0.85rem;">Role changes or account deactivation revoke active staff sessions immediately on the server.</p>
+      </div>
+      <div class="admin-action-group">
+        <a href="#create-staff-panel" class="btn btn--primary" style="min-height:38px;padding:0.4rem 0.9rem;font-size:0.84rem;">+ Create Staff Account</a>
+        <a href="/admin/mfa-setup" class="btn btn--secondary" style="min-height:38px;padding:0.4rem 0.9rem;font-size:0.84rem;">Manage / Rotate My MFA &rarr;</a>
+      </div>
+    </div>
+
+    <form method="GET" action="/admin/users" class="admin-filter-bar">
+      <div class="field" style="flex:1;min-width:14rem;">
+        <label for="usr-q">Search by name or email</label>
+        <input id="usr-q" name="q" type="search" value="${escapeHtml(filters.q || '')}" placeholder="Search staff member...">
+      </div>
+      <div class="field" style="min-width:13rem;">
+        <label for="usr-role-filter">Role</label>
+        <select id="usr-role-filter" name="role">
+          <option value="">All 7 PRD roles</option>
+          ${allRoleNames.map((r) => `<option value="${escapeHtml(r)}"${filters.role === r ? ' selected' : ''}>${escapeHtml(getRoleDisplayLabel(r))}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field" style="min-width:10rem;">
+        <label for="usr-status-filter">Account Status</label>
+        <select id="usr-status-filter" name="status">
+          <option value="">All statuses</option>
+          <option value="active"${filters.status === 'active' ? ' selected' : ''}>Active only</option>
+          <option value="revoked"${filters.status === 'revoked' ? ' selected' : ''}>Revoked only</option>
+        </select>
+      </div>
+      <div class="admin-action-group">
+        <button type="submit" class="btn btn--secondary">Filter</button>
+        ${filters.q || filters.role || filters.status ? '<a href="/admin/users" class="btn btn--secondary">Clear</a>' : ''}
+      </div>
+    </form>
+
+    ${
+      users.length === 0
+        ? '<div class="admin-empty-state">No staff accounts match your search or role filters.</div>'
+        : `<div class="table-scroll" tabindex="0" role="region" aria-label="Staff Accounts Directory">
+            <table class="data-table" style="font-size:0.85rem;">
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Email</th>
+                  <th scope="col">Assigned Roles</th>
+                  <th scope="col">Account Status</th>
+                  <th scope="col">Last Login (Phoenix)</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${users
+                  .map((u) => {
+                    let extra = [];
+                    try { extra = JSON.parse(u.extra_roles_json || '[]'); } catch {}
+                    const sessCount = activeSessionsMap[u.user_id] || 0;
+                    const lastLogin = lastLoginMap[u.user_id];
+                    const isSelf = u.user_id === user.user_id;
+                    return `<tr class="${selectedUser?.user_id === u.user_id ? 'is-selected' : ''}">
+                      <td>
+                        <a href="/admin/users?user=${encodeURIComponent(u.user_id)}#user-details-panel"><strong>${escapeHtml(u.full_name)}</strong></a>
+                        ${isSelf ? ' <span class="badge">You</span>' : ''}
+                      </td>
+                      <td><code>${escapeHtml(u.email)}</code></td>
+                      <td>
+                        <div class="admin-action-group">
+                          <span class="badge badge--oxide">${escapeHtml(getRoleDisplayLabel(u.role))}</span>
+                          ${extra.map((er) => `<span class="badge">${escapeHtml(getRoleDisplayLabel(er))}</span>`).join('')}
+                        </div>
+                      </td>
+                      <td>
+                        <div class="admin-action-group">
+                          <span class="badge ${u.active ? 'badge--live' : 'badge--err'}">${u.active ? 'Active' : 'Revoked'}</span>
+                          <span class="badge ${u.mfa_enabled && u.mfa_enrolled ? 'badge--live' : 'badge--warn'}">${u.mfa_enabled ? (u.mfa_enrolled ? 'MFA Enrolled' : 'MFA Pending') : 'MFA Off'}</span>
+                        </div>
+                        <small class="muted">${sessCount} active session(s)</small>
+                      </td>
+                      <td>${lastLogin ? escapeHtml(formatPhoenixDateTime(lastLogin, false)) : '<span class="muted">No login recorded</span>'}</td>
+                      <td>
+                        <div class="admin-action-group">
+                          <a href="/admin/users?user=${encodeURIComponent(u.user_id)}#user-details-panel" class="btn btn--secondary" style="min-height:34px;padding:0.25rem 0.6rem;font-size:0.78rem;">Details &amp; Roles</a>
+                          ${
+                            canManageUsers
+                              ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.25rem 0.6rem;font-size:0.78rem;" data-url="/admin/api/users/${encodeURIComponent(u.user_id)}/mfa-recovery-token">MFA Setup Link</button>
+                                 <button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.25rem 0.6rem;font-size:0.78rem;" data-url="/admin/api/users/${encodeURIComponent(u.user_id)}/revoke-sessions" data-confirm-title="Revoke All Active Sessions?" data-confirm="Sign out ${escapeHtml(u.full_name)} (${escapeHtml(u.email)}) from all active browser sessions immediately?">Revoke Sessions</button>
+                                 ${
+                                   u.active
+                                     ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.25rem 0.6rem;font-size:0.78rem;" data-url="/admin/api/users/${encodeURIComponent(u.user_id)}/deactivate" data-confirm-title="Deactivate Staff Account?" data-confirm="Deactivating ${escapeHtml(u.full_name)} immediately revokes access and clears all active sessions.">Deactivate</button>`
+                                     : `<button type="button" class="btn btn--primary js-action-btn" style="min-height:34px;padding:0.25rem 0.6rem;font-size:0.78rem;" data-url="/admin/api/users/${encodeURIComponent(u.user_id)}/activate" data-confirm-title="Reactivate Staff Account?" data-confirm="Allow ${escapeHtml(u.full_name)} (${escapeHtml(u.email)}) to sign in again with existing role assignments?">Activate</button>`
+                                 }`
+                              : ''
+                          }
+                        </div>
+                      </td>
+                    </tr>`;
+                  })
+                  .join('')}
+              </tbody>
+            </table>
+          </div>`
+    }
+  </section>
+
+  <div class="admin-split">
+    <section id="user-details-panel" class="admin-card">
+      ${
+        selectedUser
+          ? (() => {
+              let extra = [];
+              try { extra = JSON.parse(selectedUser.extra_roles_json || '[]'); } catch {}
+              const combinedRoles = getUserRoles(selectedUser);
+              const effectivePerms = Array.from(new Set(combinedRoles.flatMap((r) => rolePermissionMap[r] || [])));
+              const sessCount = activeSessionsMap[selectedUser.user_id] || 0;
+              const lastLogin = lastLoginMap[selectedUser.user_id];
+              return `
+                <div class="admin-card__header">
+                  <div>
+                    <h2>User Details: ${escapeHtml(selectedUser.full_name)}</h2>
+                    <p class="muted" style="margin:0;font-size:0.84rem;"><code>${escapeHtml(selectedUser.email)}</code> &middot; ID <code>${escapeHtml(selectedUser.user_id)}</code></p>
+                  </div>
+                  <span class="badge ${selectedUser.active ? 'badge--live' : 'badge--err'}">${selectedUser.active ? 'Active' : 'Revoked'}</span>
+                </div>
+
+                <div class="grid-2" style="margin-bottom:1rem;font-size:0.86rem;">
+                  <div>
+                    <strong>Last Login (Phoenix):</strong> ${lastLogin ? escapeHtml(formatPhoenixDateTime(lastLogin, false)) : 'No login recorded'}<br>
+                    <strong>Account Created:</strong> ${escapeHtml(formatPhoenixDateTime(selectedUser.created_at, false))}
+                  </div>
+                  <div>
+                    <strong>Active Sessions:</strong> ${sessCount}<br>
+                    <strong>MFA Status:</strong> ${selectedUser.mfa_enabled ? (selectedUser.mfa_enrolled ? 'Enrolled (TOTP)' : 'Setup Pending (TOTP)') : 'Disabled'}
+                  </div>
+                </div>
+
+                <form method="POST" action="/admin/api/users/${escapeHtml(selectedUser.user_id)}" class="js-ajax-form" data-confirm-title="Save Role & Access Changes?" data-confirm="Updating roles for ${escapeHtml(selectedUser.full_name)} will immediately revoke their active sessions if privileges changed." data-success-msg="Updated role assignment and refreshed server-side access.">
+                  <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+                  <div class="field">
+                    <label for="eu-role">Primary Role</label>
+                    <select id="eu-role" name="role" ${canManageUsers ? '' : 'disabled'}>
+                      ${allRoleNames.map((r) => `<option value="${escapeHtml(r)}"${selectedUser.role === r ? ' selected' : ''}>${escapeHtml(getRoleDisplayLabel(r))}</option>`).join('')}
+                    </select>
+                  </div>
+                  <fieldset class="admin-fieldset">
+                    <legend>Additional Assigned Roles (Multi-Role Checkboxes)</legend>
+                    ${renderRoleCheckboxes(`eu-extra-${selectedUser.user_id}`, extra, selectedUser.role)}
+                  </fieldset>
+                  <button type="submit" class="btn btn--primary" ${canManageUsers ? '' : 'disabled'}>Save Role Assignment</button>
+                </form>
+
+                <h3>Effective Server-Side Permissions (${effectivePerms.length})</h3>
+                <div class="perm-chip-list">
+                  ${
+                    effectivePerms.length === 0
+                      ? '<span class="muted">No permissions assigned.</span>'
+                      : effectivePerms.map((p) => `<span class="perm-chip" title="${escapeHtml(p)}">${escapeHtml(permLabelByKey[p] || p)}</span>`).join('')
+                  }
+                </div>
+
+                <h3>Recent User Activity History</h3>
+                ${
+                  userAuditLogs.length === 0
+                    ? '<div class="admin-empty-state">No recorded non-hiring activity for this user yet.</div>'
+                    : `<div class="table-scroll" tabindex="0" role="region" aria-label="User Audit Activity">
+                        <table class="data-table" style="font-size:0.81rem;">
+                          <thead><tr><th scope="col">Time (Phoenix)</th><th scope="col">Domain</th><th scope="col">Action</th><th scope="col">Object</th></tr></thead>
+                          <tbody>
+                            ${userAuditLogs
+                              .map(
+                                (al) => `<tr><td>${escapeHtml(formatPhoenixDateTime(al.created_at, false))}</td><td><span class="badge">${escapeHtml(al.domain)}</span></td><td>${escapeHtml(al.action)}</td><td><code>${escapeHtml(al.object_type)}:${escapeHtml(al.object_id)}</code></td></tr>`
+                              )
+                              .join('')}
+                          </tbody>
+                        </table>
+                      </div>`
+                }
+              `;
+            })()
+          : `<h2>User Details &amp; Effective Permissions</h2>
+             <div class="admin-empty-state">Select any staff member in the directory above (` + '`Details & Roles`' + `) to inspect their effective permissions, edit multi-role checkboxes, or review account activity history.</div>`
+      }
+    </section>
+
+    <section id="create-staff-panel" class="admin-card">
+      <h2>Create Staff Account</h2>
+      <p class="muted" style="font-size:0.85rem;">Provision individual staff identities with a primary role and optional additional roles.</p>
+      ${
+        canManageUsers
+          ? `<form method="POST" action="/admin/api/users" class="js-ajax-form" data-success-msg="Staff account created cleanly.">
+              <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+              <div class="grid-2">
+                <div class="field"><label for="nu-name">Full Name</label><input type="text" id="nu-name" name="full_name" required></div>
+                <div class="field"><label for="nu-email">Staff Email</label><input type="email" id="nu-email" name="email" required></div>
+              </div>
+              <div class="grid-2">
+                <div class="field"><label for="nu-role">Primary Role</label>
+                  <select id="nu-role" name="role">
+                    ${allRoleNames.map((r) => `<option value="${escapeHtml(r)}">${escapeHtml(getRoleDisplayLabel(r))}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="field"><label for="nu-pass">Initial Password (min 10 chars)</label><input type="password" id="nu-pass" name="password" minlength="10" required></div>
+              </div>
+              <fieldset class="admin-fieldset">
+                <legend>Additional Roles (Optional Multi-Role Assignment)</legend>
+                ${renderRoleCheckboxes('nu-extra', [], '')}
+              </fieldset>
+              <button type="submit" class="btn btn--primary">Create Staff Account</button>
+            </form>`
+          : '<div class="admin-empty-state">Only Platform Administrators can provision staff accounts.</div>'
+      }
+    </section>
+  </div>
+
+  <section class="admin-card">
+    <div class="admin-card__header">
+      <div>
+        <h2>PRD Role Explorer &amp; Server-Side Permission Matrix</h2>
+        <p class="muted" style="margin:0;font-size:0.85rem;">Click any of the 7 roles to inspect its description, granted permissions, and currently assigned staff.</p>
+      </div>
+    </div>
+
+    <div class="role-card-grid">
+      ${allRoleNames
+        .map((r) => {
+          const perms = rolePermissionMap[r] || [];
+          const count = roleAssignedCounts[r] || 0;
+          const isSelected = r === activeRoleDetail;
+          return `<a href="/admin/users?roleDetail=${encodeURIComponent(r)}${selectedUser ? `&user=${encodeURIComponent(selectedUser.user_id)}` : ''}#role-detail-inspector" class="role-summary-card${isSelected ? ' is-selected' : ''}">
+            <div>
+              <strong>${escapeHtml(getRoleDisplayLabel(r))}</strong>
+              <p class="muted" style="font-size:0.78rem;margin:0.35rem 0 0;line-height:1.4;">${escapeHtml(ROLE_DESCRIPTIONS[r] || '')}</p>
+            </div>
+            <div class="admin-action-group" style="margin-top:0.4rem;">
+              <span class="badge">${count} user(s)</span>
+              <span class="badge badge--live">${perms.length} perm(s)</span>
+            </div>
+          </a>`;
+        })
+        .join('')}
+    </div>
+
+    <div id="role-detail-inspector" class="panel panel--light" style="margin-bottom:1.35rem;">
+      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.75rem;margin-bottom:0.65rem;">
+        <h3 style="margin:0;border:0;padding:0;">Role Detail: ${escapeHtml(getRoleDisplayLabel(activeRoleDetail))}</h3>
+        <span class="badge badge--oxide">${roleUsers.length} Assigned Staff Member(s)</span>
+      </div>
+      <p style="font-size:0.88rem;margin-bottom:0.75rem;">${escapeHtml(ROLE_DESCRIPTIONS[activeRoleDetail] || '')}</p>
+      <div style="margin-bottom:0.75rem;">
+        <strong style="font-size:0.83rem;display:block;margin-bottom:0.35rem;">Granted Permissions:</strong>
+        <div class="perm-chip-list">
+          ${(rolePermissionMap[activeRoleDetail] || []).map((p) => `<span class="perm-chip">${escapeHtml(permLabelByKey[p] || p)} (<code>${escapeHtml(p)}</code>)</span>`).join('')}
+        </div>
+      </div>
+      <div>
+        <strong style="font-size:0.83rem;display:block;margin-bottom:0.3rem;">Assigned Users:</strong>
+        ${
+          roleUsers.length === 0
+            ? '<span class="muted" style="font-size:0.84rem;">No staff users currently assigned to this role.</span>'
+            : `<div class="admin-action-group">${roleUsers.map((ru) => `<a href="/admin/users?user=${encodeURIComponent(ru.user_id)}#user-details-panel" class="badge">${escapeHtml(ru.full_name)}</a>`).join('')}</div>`
+        }
+      </div>
+    </div>
+
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Full Role Permission Matrix">
+      <table class="data-table matrix-table" style="font-size:0.81rem;">
+        <thead>
+          <tr>
+            <th scope="col">Capability / Server Permission</th>
+            ${allRoleNames.map((r) => `<th scope="col">${escapeHtml(getRoleDisplayLabel(r))}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${PERMISSION_META.map(
+            (pm) => `<tr>
+              <th scope="row">${escapeHtml(pm.label)}<br><small class="muted"><code>${escapeHtml(pm.key)}</code></small></th>
+              ${allRoleNames
+                .map((r) => {
+                  const granted = (rolePermissionMap[r] || []).includes(pm.key);
+                  return `<td class="${granted ? 'matrix-cell--yes' : 'matrix-cell--no'}" aria-label="${granted ? 'Granted' : 'Not granted'}">${granted ? '&#10003;' : '&mdash;'}</td>`;
+                })
+                .join('')}
+            </tr>`
+          ).join('')}
+        </tbody>
+      </table>
+    </div>
+  </section>`;
+}
+
 export function renderAdminSettingsView({
   settings,
   users,
@@ -1826,76 +2425,37 @@ export function renderAdminSettingsView({
   const canManageSettings = hasPermission(user, PERMISSIONS.MANAGE_SETTINGS);
   const canManageBackups = hasPermission(user, PERMISSIONS.MANAGE_BACKUPS);
   const allRoleNames = Object.values(ROLES);
+  const activeUsersCount = users.filter((u) => Boolean(u.active)).length;
+  const activeSessionsTotal = Object.values(activeSessionsMap).reduce((sum, n) => sum + Number(n || 0), 0);
 
   return `
-  <section class="admin-card">
-    <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.75rem;margin-bottom:0.85rem;">
-      <div>
-        <h2 style="border:0;padding:0;margin:0 0 0.25rem;">Staff Accounts, Roles &amp; Session Controls</h2>
-        <p class="muted" style="font-size:0.86rem;margin:0;">Deactivating a staff user or changing their role immediately revokes all active sessions server-side.</p>
-      </div>
-      <a href="/admin/mfa-setup" class="btn btn--secondary" style="min-height:38px;padding:0.4rem 0.9rem;font-size:0.84rem;">Manage / Rotate My MFA &rarr;</a>
-    </div>
-    <div class="table-scroll" tabindex="0" role="region" aria-label="Staff Accounts Table">
-      <table class="data-table" style="font-size:0.86rem;">
-        <thead><tr><th>Staff Member</th><th>Role &amp; Extra Roles</th><th>MFA / Sessions</th><th>Status &amp; Actions</th></tr></thead>
-        <tbody>
-          ${users
-            .map((u) => {
-              let extra = [];
-              try { extra = JSON.parse(u.extra_roles_json || '[]'); } catch {}
-              const sessCount = activeSessionsMap[u.user_id] || 0;
-              return `<tr>
-                <td style="min-width:190px;"><strong>${escapeHtml(u.full_name)}</strong><br><small class="muted">${escapeHtml(u.email)}</small></td>
-                <td style="min-width:250px;">
-                  ${
-                    canManageUsers
-                      ? `<form method="POST" action="/admin/api/users/${escapeHtml(u.user_id)}" class="js-ajax-form" style="display:flex;flex-direction:column;gap:0.4rem;">
-                          <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
-                          <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
-                            <select name="role" aria-label="Primary role for ${escapeHtml(u.email)}" style="flex:1;min-width:165px;">
-                              ${allRoleNames.map((r) => `<option value="${escapeHtml(r)}"${u.role === r ? ' selected' : ''}>${escapeHtml(r)}</option>`).join('')}
-                            </select>
-                            <button type="submit" class="btn btn--secondary" style="min-height:36px;padding:0.25rem 0.7rem;font-size:0.8rem;">Save Role</button>
-                          </div>
-                          <input type="text" name="extra_roles" value="${escapeHtml(extra.join(', '))}" aria-label="Extra roles comma-separated" placeholder="Extra roles (comma-separated)">
-                        </form>`
-                      : `${escapeHtml(u.role)}${extra.length ? `<br><small class="muted">+ ${escapeHtml(extra.join(', '))}</small>` : ''}`
-                  }
-                </td>
-                <td style="min-width:165px;">
-                  <span class="badge ${u.mfa_enabled && u.mfa_enrolled ? 'badge--live' : 'badge--warn'}">${u.mfa_enabled ? (u.mfa_enrolled ? 'Enrolled (TOTP)' : 'Setup Pending (TOTP)') : 'Off'}</span>
-                  <div class="muted" style="font-size:0.8rem;margin-top:0.35rem;">${sessCount} active session(s)</div>
-                </td>
-                <td style="min-width:265px;">
-                  <div class="admin-action-group">
-                    <span class="badge ${u.active ? 'badge--live' : 'badge--err'}">${u.active ? 'Active' : 'Revoked'}</span>
-                    ${
-                      canManageUsers
-                        ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.25rem 0.65rem;font-size:0.78rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/mfa-recovery-token">Issue MFA Setup Link</button>
-                           <button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.25rem 0.65rem;font-size:0.78rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/revoke-sessions">Revoke Sessions</button>
-                           ${
-                             u.active
-                               ? `<button type="button" class="btn btn--secondary js-action-btn" style="min-height:34px;padding:0.25rem 0.65rem;font-size:0.78rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/deactivate">Deactivate</button>`
-                               : `<button type="button" class="btn btn--primary js-action-btn" style="min-height:34px;padding:0.25rem 0.65rem;font-size:0.78rem;" data-url="/admin/api/users/${escapeHtml(u.user_id)}/activate">Activate</button>`
-                           }`
-                        : ''
-                    }
-                  </div>
-                </td>
-              </tr>`;
-            })
-            .join('')}
-        </tbody>
-      </table>
-    </div>
-  </section>
+  ${
+    canManageUsers
+      ? `<section class="admin-card">
+          <div class="admin-card__header">
+            <div>
+              <h2>Staff Identity &amp; Role Governance</h2>
+              <p class="muted" style="margin:0;font-size:0.85rem;">${users.length} total accounts (${activeUsersCount} active) &middot; ${activeSessionsTotal} live staff session(s) across ${allRoleNames.length} PRD roles.</p>
+            </div>
+            <div class="admin-action-group">
+              <a href="/admin/users" class="btn btn--primary" style="min-height:38px;padding:0.4rem 0.95rem;font-size:0.84rem;">Open Users &amp; Roles Workspace &rarr;</a>
+              <a href="/admin/mfa-setup" class="btn btn--secondary" style="min-height:38px;padding:0.4rem 0.9rem;font-size:0.84rem;">Manage / Rotate My MFA &rarr;</a>
+            </div>
+          </div>
+        </section>`
+      : ''
+  }
 
   ${
     canManageSettings
       ? `<section class="admin-card">
-          <h2>Canonical Business Settings</h2>
-          <form method="POST" action="/admin/api/settings" class="js-ajax-form">
+          <div class="admin-card__header">
+            <div>
+              <h2>Canonical Business Settings</h2>
+              <p class="muted" style="margin:0;font-size:0.85rem;">Shared across public headers, footers, structured schema, and procurement credentials.</p>
+            </div>
+          </div>
+          <form method="POST" action="/admin/api/settings" class="js-ajax-form" data-success-msg="Canonical business settings updated across public templates.">
             <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
             <div class="grid-2">
               <div class="field"><label for="bs-trading">Trading Name</label><input type="text" id="bs-trading" name="trading_name" value="${escapeHtml(settings.trading_name)}" required></div>
@@ -1916,86 +2476,63 @@ export function renderAdminSettingsView({
       : ''
   }
 
-  <div class="grid-2" style="align-items:start;">
-    ${
-      canManageUsers
-        ? `<section class="admin-card">
-            <h2>Create Staff Account</h2>
-            <form method="POST" action="/admin/api/users" class="js-ajax-form">
-              <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
-              <div class="grid-2">
-                <div class="field"><label for="nu-name">Full Name</label><input type="text" id="nu-name" name="full_name" required></div>
-                <div class="field"><label for="nu-email">Staff Email</label><input type="email" id="nu-email" name="email" required></div>
-              </div>
-              <div class="grid-2">
-                <div class="field"><label for="nu-role">Primary Role</label>
-                  <select id="nu-role" name="role">
-                    ${allRoleNames.map((r) => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('')}
-                  </select>
-                </div>
-                <div class="field"><label for="nu-extra">Additional Roles (comma-separated, optional)</label><input type="text" id="nu-extra" name="extra_roles" placeholder="e.g. Analyst"></div>
-              </div>
-              <div class="field"><label for="nu-pass">Initial Password (min 10 chars)</label><input type="password" id="nu-pass" name="password" minlength="10" required></div>
-              <button type="submit" class="btn btn--primary">Create Staff Account</button>
-            </form>
-          </section>`
-        : ''
-    }
-
-    ${
-      canManageBackups
-        ? `<section class="admin-card">
-            <h2>Company-Owned Backup &amp; Export (OPS-01 / OPS-03)</h2>
-            <p class="muted" style="font-size:0.86rem;">Generates a portable JSON snapshot plus checksummed full backups with SHA-256 verification and re-evaluated restore.</p>
-            <div class="admin-action-group" style="margin-bottom:1rem;">
+  ${
+    canManageBackups
+      ? `<section class="admin-card">
+          <div class="admin-card__header">
+            <div>
+              <h2>Company-Owned Backup &amp; Export (OPS-01 / OPS-03)</h2>
+              <p class="muted" style="margin:0;font-size:0.85rem;">Generates a portable JSON snapshot plus checksummed full backups with SHA-256 verification and re-evaluated restore.</p>
+            </div>
+            <div class="admin-action-group">
               <a href="/admin/api/backup/export.json" class="btn btn--secondary">Download Portable JSON Export</a>
               <button type="button" class="btn btn--primary js-action-btn" data-url="/admin/api/backups/create">Create Verified Full Backup Now</button>
             </div>
-            ${
-              backupRuns.length > 0
-                ? `<div class="table-scroll" tabindex="0" role="region" aria-label="Full Backup Runs">
-                     <table class="data-table" style="font-size:0.82rem;">
-                       <thead><tr><th>Backup ID / Reason</th><th>Created (Phoenix)</th><th>Files</th><th>Status</th><th>Actions</th></tr></thead>
-                       <tbody>
-                         ${backupRuns
-                           .map(
-                             (b) => `<tr>
-                               <td><code>${escapeHtml(b.backup_id.slice(0, 8))}</code> (${escapeHtml(b.reason)})</td>
-                               <td>${escapeHtml(formatPhoenixDateTime(b.created_at, false))}</td>
-                               <td>${escapeHtml(b.file_count)}</td>
-                               <td><span class="badge ${b.status === 'verified' ? 'badge--live' : b.status === 'corrupted' ? 'badge--err' : 'badge--warn'}">${escapeHtml(b.status)}</span></td>
-                               <td>
-                                 <div class="admin-action-group">
-                                   <button type="button" class="btn btn--secondary js-action-btn" style="min-height:32px;padding:0.2rem 0.55rem;font-size:0.76rem;" data-url="/admin/api/backups/${escapeHtml(b.backup_id)}/verify">Verify SHA-256</button>
-                                   <button type="button" class="btn btn--secondary js-action-btn" style="min-height:32px;padding:0.2rem 0.55rem;font-size:0.76rem;" data-url="/admin/api/backups/${escapeHtml(b.backup_id)}/restore">Restore</button>
-                                 </div>
-                               </td>
-                             </tr>`
-                           )
-                           .join('')}
-                       </tbody>
-                     </table>
-                   </div>`
-                : '<p class="muted" style="font-size:0.84rem;">No full filesystem backups recorded yet.</p>'
-            }
-          </section>`
-        : ''
-    }
-  </div>
+          </div>
+          ${
+            backupRuns.length > 0
+              ? `<div class="table-scroll" tabindex="0" role="region" aria-label="Full Backup Runs">
+                   <table class="data-table" style="font-size:0.84rem;">
+                     <thead><tr><th scope="col">Backup ID / Reason</th><th scope="col">Created (Phoenix)</th><th scope="col">Files</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead>
+                     <tbody>
+                       ${backupRuns
+                         .map(
+                           (b) => `<tr>
+                             <td><code>${escapeHtml(b.backup_id.slice(0, 8))}</code> (${escapeHtml(b.reason)})</td>
+                             <td>${escapeHtml(formatPhoenixDateTime(b.created_at, false))}</td>
+                             <td>${escapeHtml(b.file_count)}</td>
+                             <td><span class="badge ${b.status === 'verified' ? 'badge--live' : b.status === 'corrupted' ? 'badge--err' : 'badge--warn'}">${escapeHtml(b.status)}</span></td>
+                             <td>
+                               <div class="admin-action-group">
+                                 <button type="button" class="btn btn--secondary js-action-btn" style="min-height:32px;padding:0.2rem 0.55rem;font-size:0.78rem;" data-url="/admin/api/backups/${escapeHtml(b.backup_id)}/verify">Verify SHA-256</button>
+                                 <button type="button" class="btn btn--secondary js-action-btn" style="min-height:32px;padding:0.2rem 0.55rem;font-size:0.78rem;" data-url="/admin/api/backups/${escapeHtml(b.backup_id)}/restore" data-confirm-title="Restore From Backup Snapshot?" data-confirm="Restore content and media associations from backup ${escapeHtml(b.backup_id.slice(0, 8))}? Intervening inquiries and deletion records will be preserved and dates re-evaluated.">Restore</button>
+                               </div>
+                             </td>
+                           </tr>`
+                         )
+                         .join('')}
+                     </tbody>
+                   </table>
+                 </div>`
+              : '<div class="admin-empty-state">No full filesystem backups recorded yet.</div>'
+          }
+        </section>`
+      : ''
+  }
 
   ${
     canManageBackups
       ? `<section class="admin-card">
-          <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.75rem;margin-bottom:0.85rem;">
+          <div class="admin-card__header">
             <div>
-              <h2 style="margin:0;">Retention &amp; Automated Deletion Policies (PRD 17.09 &amp; 21.03)</h2>
+              <h2>Retention &amp; Automated Deletion Policies (PRD 17.09 &amp; 21.03)</h2>
               <p class="muted" style="margin:0;font-size:0.85rem;">Policies marked <strong>Pending Client Approval</strong> never auto-delete data until an administrator saves an approved retention period.</p>
             </div>
-            <button type="button" class="btn btn--secondary js-action-btn" data-url="/admin/api/retention/run">Run Approved Retention Sweep</button>
+            <button type="button" class="btn btn--secondary js-action-btn" data-url="/admin/api/retention/run" data-confirm-title="Run Retention Purge Sweep?" data-confirm="Execute deletion across explicitly approved retention categories only? Unapproved or legal-hold records remain protected.">Run Approved Retention Sweep</button>
           </div>
           <div class="table-scroll" tabindex="0" role="region" aria-label="Retention Policies Table">
-            <table class="data-table" style="font-size:0.82rem;">
-              <thead><tr><th>Data Category &amp; PRD Rule</th><th>Approval Status</th><th>Retention Days &amp; Action</th><th>Last Sweep</th></tr></thead>
+            <table class="data-table" style="font-size:0.83rem;">
+              <thead><tr><th scope="col">Data Category &amp; PRD Rule</th><th scope="col">Approval Status</th><th scope="col">Retention Days &amp; Action</th><th scope="col">Last Sweep</th></tr></thead>
               <tbody>
                 ${retentionPolicies
                   .map(
@@ -2003,7 +2540,7 @@ export function renderAdminSettingsView({
                       <td><strong>${escapeHtml(p.label)}</strong><br><small class="muted">${escapeHtml(p.prd_reference)}</small></td>
                       <td><span class="badge ${p.approved_by_client ? 'badge--live' : 'badge--warn'}">${p.approved_by_client ? `Approved (${escapeHtml(p.approved_by_user || 'Client')})` : 'Pending Client Approval'}</span></td>
                       <td>
-                        <form method="POST" action="/admin/api/retention/policies/${escapeHtml(p.policy_key)}" class="js-ajax-form" style="display:flex;gap:0.35rem;align-items:center;flex-wrap:wrap;">
+                        <form method="POST" action="/admin/api/retention/policies/${escapeHtml(p.policy_key)}" class="js-ajax-form" data-confirm-title="Approve Retention Schedule?" data-confirm="Save and approve automated retention rule for ${escapeHtml(p.label)}?" style="display:flex;gap:0.35rem;align-items:center;flex-wrap:wrap;">
                           <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
                           <input type="hidden" name="approved" value="true">
                           <input type="number" name="retention_days" min="1" max="3650" value="${p.retention_days ?? ''}" placeholder="Days (TBD)" aria-label="Retention days for ${escapeHtml(p.policy_key)}" style="width:92px;min-height:34px;font-size:0.8rem;" required>
@@ -2022,14 +2559,20 @@ export function renderAdminSettingsView({
   }
 
   <section class="admin-card">
-    <h2>Server-Side Role &amp; Permission Matrix</h2>
+    <div class="admin-card__header">
+      <div>
+        <h2>Server-Side Role &amp; Permission Summary</h2>
+        <p class="muted" style="margin:0;font-size:0.84rem;">Quick reference of current server-side permissions. Open Users &amp; Roles for full role inspection.</p>
+      </div>
+      ${canManageUsers ? '<a href="/admin/users#role-detail-inspector" class="btn btn--secondary" style="min-height:36px;padding:0.3rem 0.7rem;font-size:0.8rem;">Open Full Matrix &rarr;</a>' : ''}
+    </div>
     <div class="table-scroll" tabindex="0" role="region" aria-label="Role Permission Matrix">
       <table class="data-table" style="font-size:0.82rem;">
-        <thead><tr><th>Role</th><th>Granted Server-Side Permissions</th></tr></thead>
+        <thead><tr><th scope="col">Role</th><th scope="col">Granted Server-Side Permissions</th></tr></thead>
         <tbody>
           ${allRoleNames
             .map(
-              (r) => `<tr><td><strong>${escapeHtml(r)}</strong></td><td>${(rolePermissionMap[r] || []).map((p) => `<code>${escapeHtml(p)}</code>`).join(' ')}</td></tr>`
+              (r) => `<tr><td><strong>${escapeHtml(getRoleDisplayLabel(r))}</strong></td><td><div class="perm-chip-list">${(rolePermissionMap[r] || []).map((p) => `<span class="perm-chip">${escapeHtml(p)}</span>`).join('')}</div></td></tr>`
             )
             .join('')}
         </tbody>

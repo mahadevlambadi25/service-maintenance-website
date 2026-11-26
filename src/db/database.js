@@ -155,6 +155,20 @@ function createSqliteQueryInterface(sqliteDb) {
   };
 }
 
+export async function detectPgNeedsMigration(runtimePool) {
+  try {
+    const check = await runtimePool.query('SELECT id FROM business_settings WHERE id = 1 LIMIT 1');
+    await runtimePool.query(
+      'SELECT mfa_enrolled, mfa_pending_secret, recovery_codes_json, last_login_at FROM users LIMIT 1'
+    );
+    await runtimePool.query('SELECT token_id FROM mfa_recovery_tokens LIMIT 1');
+    await runtimePool.query('SELECT mfa_required FROM auth_policy_state LIMIT 1');
+    return !check.rows?.length;
+  } catch {
+    return true;
+  }
+}
+
 export async function getDb(customPath = null, storagePaths = STORAGE_PATHS, { forceMigrate = false } = {}) {
   if (dbInstance && !customPath && !forceMigrate) return dbInstance;
   ensureStorageDirs(storagePaths);
@@ -218,20 +232,7 @@ export async function getDb(customPath = null, storagePaths = STORAGE_PATHS, { f
     } catch {}
   }
 
-  let needsMigration = Boolean(forceMigrate);
-  if (!needsMigration) {
-    try {
-      const check = await runtimePool.query('SELECT id FROM business_settings WHERE id = 1 LIMIT 1');
-      await runtimePool.query('SELECT mfa_enrolled, mfa_pending_secret, recovery_codes_json FROM users LIMIT 1');
-      await runtimePool.query('SELECT token_id FROM mfa_recovery_tokens LIMIT 1');
-      await runtimePool.query('SELECT mfa_required FROM auth_policy_state LIMIT 1');
-      if (!check.rows?.length) {
-        needsMigration = true;
-      }
-    } catch {
-      needsMigration = true;
-    }
-  }
+  const needsMigration = Boolean(forceMigrate) || (await detectPgNeedsMigration(runtimePool));
 
   if (needsMigration) {
     const migrationPool = new pg.Pool({
@@ -837,6 +838,7 @@ export async function migrateSchema(db) {
     ['users', 'mfa_enrolled_at', 'TEXT'],
     ['users', 'mfa_pending_secret', 'TEXT'],
     ['users', 'recovery_codes_json', "TEXT NOT NULL DEFAULT '[]'"],
+    ['users', 'last_login_at', 'TEXT'],
   ];
 
   for (const [table, column, definition] of additiveColumns) {

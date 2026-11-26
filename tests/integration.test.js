@@ -969,9 +969,63 @@ test('Full PRD P0 Acceptance Register Integration Suite', async (t) => {
     });
     assert.equal(createRes.status, 201);
     const created = await createRes.json();
-    assert.ok(created.user_id && created.totp_secret);
+    assert.ok(created.user_id);
+    assert.equal(created.totp_secret, undefined);
+    assert.equal('totp_secret' in created, false);
+    assert.equal(created.mfa_enrolled, false);
 
-    // Log in as new user with MFA TOTP
+    // Issue authorized single-use first-time MFA setup link & enroll via /admin/mfa-setup
+    const tokenIssueRes = await fetch(`${baseUrl}/admin/api/users/${created.user_id}/mfa-recovery-token`, {
+      method: 'POST',
+      headers: { Cookie: admin.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': admin.csrf },
+      body: JSON.stringify({ csrf_token: admin.csrf }),
+    });
+    assert.equal(tokenIssueRes.status, 200);
+    const tokenIssueData = await tokenIssueRes.json();
+    assert.equal(tokenIssueData.purpose, 'first_time_enroll');
+    assert.ok(tokenIssueData.setup_url.startsWith('/admin/mfa-setup?token='));
+    const setupToken = new URL(tokenIssueData.setup_url, baseUrl).searchParams.get('token');
+
+    const mfaGetRes = await fetch(`${baseUrl}${tokenIssueData.setup_url}`);
+    assert.equal(mfaGetRes.status, 200);
+    const mfaGetHtml = await mfaGetRes.text();
+    const mfaCsrfCookie = (mfaGetRes.headers.getSetCookie?.() || [mfaGetRes.headers.get('set-cookie')])
+      .find((c) => c?.startsWith('sm_mfa_csrf='))
+      .split(';')[0];
+    const mfaStep1Csrf = mfaGetHtml.match(/name="csrf_token" value="([^"]+)"/)[1];
+
+    const mfaBeginRes = await fetch(`${baseUrl}/admin/mfa-setup`, {
+      method: 'POST',
+      headers: { Cookie: mfaCsrfCookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: mfaStep1Csrf,
+        step: 'begin',
+        email: 'ops.staff@smiaz.local',
+        password: 'StrongPassword#2026',
+        setup_token: setupToken,
+      }).toString(),
+    });
+    assert.equal(mfaBeginRes.status, 200);
+    const mfaStep2Html = await mfaBeginRes.text();
+    const enrolledManualSecret = mfaStep2Html.match(/<code[^>]*>([A-Z2-7 ]{16,})<\/code>/)[1].replace(/\s+/g, '');
+    const mfaStep2Csrf = mfaStep2Html.match(/name="csrf_token" value="([^"]+)"/)[1];
+    const mfaStep2Cookies = (mfaBeginRes.headers.getSetCookie?.() || [mfaBeginRes.headers.get('set-cookie')])
+      .map((c) => c.split(';')[0])
+      .join('; ');
+
+    const mfaConfirmRes = await fetch(`${baseUrl}/admin/mfa-setup`, {
+      method: 'POST',
+      headers: { Cookie: mfaStep2Cookies, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: mfaStep2Csrf,
+        step: 'confirm',
+        totp_code: generateTotpCode(enrolledManualSecret),
+      }).toString(),
+    });
+    assert.equal(mfaConfirmRes.status, 200);
+    assert.ok((await mfaConfirmRes.text()).includes('Google Authenticator Enrolled'));
+
+    // Log in as new user with newly enrolled MFA TOTP
     const loginResp = await fetch(`${baseUrl}/admin/login`, {
       method: 'POST',
       redirect: 'manual',
@@ -979,7 +1033,7 @@ test('Full PRD P0 Acceptance Register Integration Suite', async (t) => {
       body: new URLSearchParams({
         email: 'ops.staff@smiaz.local',
         password: 'StrongPassword#2026',
-        totp_code: generateTotpCode(created.totp_secret),
+        totp_code: generateTotpCode(enrolledManualSecret),
       }),
     });
     assert.equal(loginResp.status, 302);
@@ -1871,6 +1925,172 @@ test('Full PRD P0 Acceptance Register Integration Suite', async (t) => {
     } finally {
       if (prevCron === undefined) delete process.env.CRON_SECRET;
       else process.env.CRON_SECRET = prevCron;
+    }
+  });
+
+  await t.test('PHASE-4-RBAC: Granular 7-role matrix, multi-role reviewer fix, last_login_at, Return to Draft & escalation audit', async () => {
+    const { resetRateLimitBuckets, syncAuthPolicyState } = await import('../src/services/auth.js');
+    const prevMfaFlag = process.env.ADMIN_MFA_REQUIRED;
+    process.env.ADMIN_MFA_REQUIRED = 'true';
+    resetRateLimitBuckets();
+    loginCache.clear();
+    await syncAuthPolicyState(db);
+
+    try {
+      const admin = await loginAs(baseUrl, 'admin@smiaz.local');
+      const editor = await loginAs(baseUrl, 'editor@smiaz.local');
+      const publisher = await loginAs(baseUrl, 'publisher@smiaz.local');
+      const hiringOwner = await loginAs(baseUrl, 'hiring@smiaz.local');
+      const reviewer = await loginAs(baseUrl, 'reviewer@smiaz.local');
+      const contributor = await loginAs(baseUrl, 'projects@smiaz.local');
+      const analyst = await loginAs(baseUrl, 'analyst@smiaz.local');
+
+      // 1. last_login_at persisted cleanly on login + readable via GET /admin/api/users/:id without leaking secrets
+      const usersApiRes = await fetch(`${baseUrl}/admin/api/users`, { headers: { Cookie: admin.cookie } });
+      assert.equal(usersApiRes.status, 200);
+      const usersApiJson = await usersApiRes.json();
+      assert.ok(Array.isArray(usersApiJson.users) && usersApiJson.users.length >= 7);
+      const editorRow = usersApiJson.users.find((u) => u.email === 'editor@smiaz.local');
+      assert.ok(editorRow && editorRow.last_login_at);
+      assert.equal(editorRow.password_hash, undefined);
+      assert.equal(editorRow.totp_secret, undefined);
+
+      // Non-admins strictly denied GET /admin/api/users & GET /admin/api/users/:id & /admin/users
+      for (const nonAdmin of [editor, publisher, hiringOwner, reviewer, contributor, analyst]) {
+        assert.equal((await fetch(`${baseUrl}/admin/users`, { headers: { Cookie: nonAdmin.cookie } })).status, 403);
+        assert.equal((await fetch(`${baseUrl}/admin/api/users`, { headers: { Cookie: nonAdmin.cookie } })).status, 403);
+        assert.equal((await fetch(`${baseUrl}/admin/api/users/usr-editor-01`, { headers: { Cookie: nonAdmin.cookie } })).status, 403);
+      }
+
+      // 2. All 7 roles enforced server-side on pages + granular APIs
+      // Platform Admin: can view /admin/pages & compare read-only, denied draft/publish/return-draft & denied hiring & denied analytics mutation
+      assert.equal((await fetch(`${baseUrl}/admin/pages`, { headers: { Cookie: admin.cookie } })).status, 200);
+      assert.equal((await fetch(`${baseUrl}/admin/api/pages/pg-home/compare?revA=1&revB=1`, { headers: { Cookie: admin.cookie } })).status, 200);
+      assert.equal(
+        (await fetch(`${baseUrl}/admin/api/pages/pg-home/draft`, {
+          method: 'POST',
+          headers: { Cookie: admin.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': admin.csrf },
+          body: JSON.stringify({ csrf_token: admin.csrf, expected_revision: 1, title: 'Blocked Admin Edit' }),
+        })).status,
+        403
+      );
+      assert.equal((await fetch(`${baseUrl}/admin/jobs`, { headers: { Cookie: admin.cookie } })).status, 403);
+      assert.equal((await fetch(`${baseUrl}/admin/api/applications/export.csv`, { headers: { Cookie: admin.cookie } })).status, 403);
+
+      // Analyst: ONLY /admin/ & /admin/analytics allowed; denied pages, projects, campaigns, leads, jobs, reviews, settings, users
+      assert.equal((await fetch(`${baseUrl}/admin/analytics`, { headers: { Cookie: analyst.cookie } })).status, 200);
+      for (const blockedPath of ['/admin/pages', '/admin/projects', '/admin/campaigns', '/admin/leads', '/admin/jobs', '/admin/reviews', '/admin/settings', '/admin/users']) {
+        assert.equal((await fetch(`${baseUrl}${blockedPath}`, { headers: { Cookie: analyst.cookie } })).status, 403, `Analyst must get 403 on ${blockedPath}`);
+      }
+
+      // Project Contributor: denied pages/preview & hiring, allowed projects upload/draft, denied project publish
+      assert.equal((await fetch(`${baseUrl}/admin/pages`, { headers: { Cookie: contributor.cookie } })).status, 403);
+      assert.equal((await fetch(`${baseUrl}/admin/preview?path=/`, { headers: { Cookie: contributor.cookie } })).status, 403);
+      assert.equal((await fetch(`${baseUrl}/admin/jobs`, { headers: { Cookie: contributor.cookie } })).status, 403);
+
+      // Hiring Reviewer: allowed /admin/jobs (scoped), strictly denied CSV export, vacancy creation, and CMS/CRM/Settings
+      assert.equal((await fetch(`${baseUrl}/admin/jobs`, { headers: { Cookie: reviewer.cookie } })).status, 200);
+      assert.equal((await fetch(`${baseUrl}/admin/api/applications/export.csv`, { headers: { Cookie: reviewer.cookie } })).status, 403);
+      assert.equal(
+        (await fetch(`${baseUrl}/admin/api/jobs`, {
+          method: 'POST',
+          headers: { Cookie: reviewer.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': reviewer.csrf },
+          body: JSON.stringify({ csrf_token: reviewer.csrf, title: 'Blocked', slug: 'blocked' }),
+        })).status,
+        403
+      );
+      assert.equal((await fetch(`${baseUrl}/admin/pages`, { headers: { Cookie: reviewer.cookie } })).status, 403);
+
+      // Hiring Owner: allowed /admin/jobs & export CSV, denied CMS/CRM/Settings
+      assert.equal((await fetch(`${baseUrl}/admin/jobs`, { headers: { Cookie: hiringOwner.cookie } })).status, 200);
+      assert.equal((await fetch(`${baseUrl}/admin/api/applications/export.csv`, { headers: { Cookie: hiringOwner.cookie } })).status, 200);
+      assert.equal((await fetch(`${baseUrl}/admin/leads`, { headers: { Cookie: hiringOwner.cookie } })).status, 403);
+
+      // 3. Return to Draft workflow with review comments + audit logging
+      const pageBefore = await db.prepare('SELECT current_revision, published_revision FROM pages WHERE page_id = ?').get('pg-about');
+      const submitRes = await fetch(`${baseUrl}/admin/api/pages/pg-about/submit-review`, {
+        method: 'POST',
+        headers: { Cookie: editor.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': editor.csrf },
+        body: JSON.stringify({ csrf_token: editor.csrf }),
+      });
+      assert.equal(submitRes.status, 200);
+
+      // Content Editor cannot invoke return-draft (403)
+      const edReturn = await fetch(`${baseUrl}/admin/api/pages/pg-about/return-draft`, {
+        method: 'POST',
+        headers: { Cookie: editor.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': editor.csrf },
+        body: JSON.stringify({ csrf_token: editor.csrf, review_comment: 'Unauthorized' }),
+      });
+      assert.equal(edReturn.status, 403);
+
+      // Publisher missing review_comment rejected (422)
+      const emptyReturn = await fetch(`${baseUrl}/admin/api/pages/pg-about/return-draft`, {
+        method: 'POST',
+        headers: { Cookie: publisher.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': publisher.csrf },
+        body: JSON.stringify({ csrf_token: publisher.csrf, review_comment: '   ' }),
+      });
+      assert.equal(emptyReturn.status, 422);
+
+      // Publisher valid return-draft succeeds, preserves published_revision, persists review_comment & audit entry
+      const okReturn = await fetch(`${baseUrl}/admin/api/pages/pg-about/return-draft`, {
+        method: 'POST',
+        headers: { Cookie: publisher.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': publisher.csrf },
+        body: JSON.stringify({ csrf_token: publisher.csrf, review_comment: 'Please clarify 1989 vs 2020 transition wording.' }),
+      });
+      assert.equal(okReturn.status, 200);
+      const pgAfter = await db.prepare('SELECT editorial_state, published_revision FROM pages WHERE page_id = ?').get('pg-about');
+      assert.equal(pgAfter.editorial_state, 'Draft');
+      assert.equal(pgAfter.published_revision, pageBefore.published_revision);
+      const revRow = await db.prepare('SELECT editorial_state, review_comment FROM page_revisions WHERE page_id = ? AND revision_number = ?').get('pg-about', pageBefore.current_revision);
+      assert.equal(revRow.editorial_state, 'Draft');
+      assert.ok(revRow.review_comment.includes('1989 vs 2020'));
+      const retAudit = await db.prepare(`SELECT * FROM audit_log WHERE domain = 'content' AND action = 'return_page_draft' AND object_id = 'pg-about' ORDER BY created_at DESC LIMIT 1`).get();
+      assert.ok(retAudit);
+
+      // 4. Role validation + multi-role Hiring Reviewer bug fix + hiring_privilege_granted audit
+      const badRoleRes = await fetch(`${baseUrl}/admin/api/users/usr-analyst-01`, {
+        method: 'POST',
+        headers: { Cookie: admin.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': admin.csrf },
+        body: JSON.stringify({ csrf_token: admin.csrf, role: 'Analyst', extra_roles: ['SuperUser999'] }),
+      });
+      assert.equal(badRoleRes.status, 422);
+
+      // Grant Hiring Reviewer as extra role to Priya Nair (Analyst) -> MUST appear in /admin/jobs reviewer dropdown & log hiring_privilege_granted!
+      const grantHrRes = await fetch(`${baseUrl}/admin/api/users/usr-analyst-01`, {
+        method: 'POST',
+        headers: { Cookie: admin.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': admin.csrf },
+        body: JSON.stringify({ csrf_token: admin.csrf, role: 'Analyst', extra_roles: ['Hiring Reviewer'] }),
+      });
+      assert.equal(grantHrRes.status, 200);
+
+      const jobsPageHtml = await (await fetch(`${baseUrl}/admin/jobs?job=REQ-TEST-01&app=${(await db.prepare('SELECT application_id FROM applications LIMIT 1').get())?.application_id || ''}`, {
+        headers: { Cookie: hiringOwner.cookie },
+      })).text();
+      if (jobsPageHtml.includes('id="app-rev"')) {
+        assert.ok(jobsPageHtml.includes('Priya Nair'));
+      }
+
+      const privAudit = await db.prepare(`SELECT details_json FROM audit_log WHERE domain = 'users' AND action = 'update_user' AND object_id = 'usr-analyst-01' ORDER BY created_at DESC LIMIT 1`).get();
+      assert.ok(privAudit && privAudit.details_json.includes('"hiring_privilege_granted":true'));
+
+      // Non-admin escalation attempt blocked
+      const escAttempt = await fetch(`${baseUrl}/admin/api/users/usr-editor-01`, {
+        method: 'POST',
+        headers: { Cookie: editor.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': editor.csrf },
+        body: JSON.stringify({ csrf_token: editor.csrf, role: 'Platform Administrator', extra_roles: ['Hiring Owner'] }),
+      });
+      assert.equal(escAttempt.status, 403);
+
+      // Restore Analyst role cleanly for downstream tests
+      await fetch(`${baseUrl}/admin/api/users/usr-analyst-01`, {
+        method: 'POST',
+        headers: { Cookie: admin.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': admin.csrf },
+        body: JSON.stringify({ csrf_token: admin.csrf, role: 'Analyst', extra_roles: [] }),
+      });
+    } finally {
+      if (prevMfaFlag === undefined) delete process.env.ADMIN_MFA_REQUIRED;
+      else process.env.ADMIN_MFA_REQUIRED = prevMfaFlag;
+      loginCache.clear();
     }
   });
 

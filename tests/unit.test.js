@@ -272,3 +272,149 @@ test('isAdminMfaRequired feature flag parses true/false cleanly', async () => {
   assert.equal(isAdminMfaRequired({ ADMIN_MFA_REQUIRED: 'true' }), true);
   assert.equal(isAdminMfaRequired({ ADMIN_MFA_REQUIRED: '1' }), true);
 });
+
+test('PRD v2.0 7-role permission matrix enforces least privilege, hiring isolation, and multi-role union', async () => {
+  const { ROLES } = await import('../src/config.js');
+  const { getUserRoles, hasPermission, PERMISSIONS } = await import('../src/services/auth.js');
+
+  const mkUser = (role, extra = [], active = 1) => ({
+    user_id: 'u-test',
+    role,
+    extra_roles_json: JSON.stringify(extra),
+    active,
+  });
+
+  const admin = mkUser(ROLES.PLATFORM_ADMIN);
+  assert.equal(hasPermission(admin, PERMISSIONS.MANAGE_USERS), true);
+  assert.equal(hasPermission(admin, PERMISSIONS.VIEW_CONTENT), true);
+  assert.equal(hasPermission(admin, PERMISSIONS.EDIT_CONTENT), false);
+  assert.equal(hasPermission(admin, PERMISSIONS.PUBLISH_CONTENT), false);
+  assert.equal(hasPermission(admin, PERMISSIONS.MANAGE_VACANCIES), false);
+  assert.equal(hasPermission(admin, PERMISSIONS.REVIEW_APPLICATIONS), false);
+  assert.equal(hasPermission(admin, PERMISSIONS.EXPORT_APPLICATIONS), false);
+
+  const editor = mkUser(ROLES.CONTENT_EDITOR);
+  assert.equal(hasPermission(editor, PERMISSIONS.EDIT_CONTENT), true);
+  assert.equal(hasPermission(editor, PERMISSIONS.UPLOAD_PROJECT_MEDIA), true);
+  assert.equal(hasPermission(editor, PERMISSIONS.APPROVE_CONTENT), false);
+  assert.equal(hasPermission(editor, PERMISSIONS.PUBLISH_CONTENT), false);
+  assert.equal(hasPermission(editor, PERMISSIONS.REVIEW_APPLICATIONS), false);
+
+  const publisher = mkUser(ROLES.APPROVER_PUBLISHER);
+  assert.equal(hasPermission(publisher, PERMISSIONS.APPROVE_CONTENT), true);
+  assert.equal(hasPermission(publisher, PERMISSIONS.PUBLISH_CONTENT), true);
+  assert.equal(hasPermission(publisher, PERMISSIONS.PUBLISH_PROJECTS), true);
+  assert.equal(hasPermission(publisher, PERMISSIONS.MANAGE_USERS), false);
+  assert.equal(hasPermission(publisher, PERMISSIONS.REVIEW_APPLICATIONS), false);
+
+  const hiringOwner = mkUser(ROLES.HIRING_OWNER);
+  assert.equal(hasPermission(hiringOwner, PERMISSIONS.MANAGE_VACANCIES), true);
+  assert.equal(hasPermission(hiringOwner, PERMISSIONS.EXPORT_APPLICATIONS), true);
+  assert.equal(hasPermission(hiringOwner, PERMISSIONS.PUBLISH_CONTENT), false);
+
+  const reviewer = mkUser(ROLES.HIRING_REVIEWER);
+  assert.equal(hasPermission(reviewer, PERMISSIONS.REVIEW_APPLICATIONS), true);
+  assert.equal(hasPermission(reviewer, PERMISSIONS.MANAGE_VACANCIES), false);
+  assert.equal(hasPermission(reviewer, PERMISSIONS.EXPORT_APPLICATIONS), false);
+
+  const contributor = mkUser(ROLES.PROJECT_CONTRIBUTOR);
+  assert.equal(hasPermission(contributor, PERMISSIONS.EDIT_PROJECTS), true);
+  assert.equal(hasPermission(contributor, PERMISSIONS.UPLOAD_PROJECT_MEDIA), true);
+  assert.equal(hasPermission(contributor, PERMISSIONS.PUBLISH_PROJECTS), false);
+  assert.equal(hasPermission(contributor, PERMISSIONS.VIEW_CONTENT), false);
+
+  const analyst = mkUser(ROLES.ANALYST);
+  assert.equal(hasPermission(analyst, PERMISSIONS.VIEW_ANALYTICS), true);
+  assert.equal(hasPermission(analyst, PERMISSIONS.EDIT_CONTENT), false);
+  assert.equal(hasPermission(analyst, PERMISSIONS.MANAGE_LEADS_CRM), false);
+
+  // Inactive users denied by default
+  assert.equal(hasPermission(mkUser(ROLES.PLATFORM_ADMIN, [], 0), PERMISSIONS.MANAGE_USERS), false);
+
+  // Multi-role combination inherits union without implicit hiring leak unless assigned
+  const combo = mkUser(ROLES.CONTENT_EDITOR, [ROLES.HIRING_REVIEWER, ROLES.ANALYST]);
+  assert.deepEqual(getUserRoles(combo), [ROLES.CONTENT_EDITOR, ROLES.HIRING_REVIEWER, ROLES.ANALYST]);
+  assert.equal(hasPermission(combo, PERMISSIONS.EDIT_CONTENT), true);
+  assert.equal(hasPermission(combo, PERMISSIONS.REVIEW_APPLICATIONS), true);
+  assert.equal(hasPermission(combo, PERMISSIONS.VIEW_ANALYTICS), true);
+  assert.equal(hasPermission(combo, PERMISSIONS.PUBLISH_CONTENT), false);
+});
+
+test('detectPgNeedsMigration detects missing users.last_login_at and additive migration preserves legacy data', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { DatabaseSync } = await import('node:sqlite');
+  const { detectPgNeedsMigration, getDb, migrateSchema } = await import('../src/db/database.js');
+
+  // 1. Postgres detection probe: missing last_login_at throws on probe query -> must return true
+  const missingColPool = {
+    async query(sql) {
+      if (sql.includes('business_settings')) return { rows: [{ id: 1 }] };
+      if (sql.includes('last_login_at')) {
+        throw new Error('column "last_login_at" does not exist');
+      }
+      return { rows: [{ ok: 1 }] };
+    },
+  };
+  assert.equal(await detectPgNeedsMigration(missingColPool), true);
+
+  // 2. Postgres detection probe: once last_login_at and required tables/rows exist -> returns false
+  const upToDatePool = {
+    async query(sql) {
+      if (sql.includes('business_settings')) return { rows: [{ id: 1 }] };
+      return { rows: [{ ok: 1 }] };
+    },
+  };
+  assert.equal(await detectPgNeedsMigration(upToDatePool), false);
+
+  // 3. Legacy SQLite database missing last_login_at preserves existing user rows when migrated
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-mig-legacy-'));
+  const legacyPath = path.join(tmpDir, 'legacy.db');
+  try {
+    const rawDb = new DatabaseSync(legacyPath);
+    rawDb.exec(`
+      CREATE TABLE users (
+        user_id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        full_name TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL,
+        extra_roles_json TEXT NOT NULL DEFAULT '[]',
+        totp_secret TEXT NOT NULL,
+        mfa_enabled INTEGER NOT NULL DEFAULT 1,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO users (user_id, email, full_name, password_hash, role, totp_secret, created_at, updated_at)
+      VALUES ('usr-legacy-1', 'legacy@smiaz.local', 'Legacy User', 'hash', 'Analyst', 'enc:v1:abc', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+    `);
+    rawDb.close();
+
+    const db = await getDb(legacyPath);
+    const cols = (await db.prepare('PRAGMA table_info(users)').all()).map((c) => c.name);
+    assert.ok(cols.includes('last_login_at'), 'Expected additive migration to add last_login_at');
+
+    const preserved = await db.prepare('SELECT user_id, email, last_login_at FROM users WHERE user_id = ?').get('usr-legacy-1');
+    assert.equal(preserved.email, 'legacy@smiaz.local');
+    assert.equal(preserved.last_login_at, null);
+
+    // 4. Verify Postgres DDL statements generated for migrateSchema include idempotent ADD COLUMN IF NOT EXISTS
+    const pgStatements = [];
+    await migrateSchema({
+      dialect: 'postgres',
+      prepare() {
+        return { async get() {}, async all() { return []; }, async run() { return { changes: 0 }; } };
+      },
+      async exec(sql) {
+        pgStatements.push(sql);
+      },
+    });
+    assert.ok(pgStatements.some((s) => s.includes('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TEXT;')));
+
+    await db.close();
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

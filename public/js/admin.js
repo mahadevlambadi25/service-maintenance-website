@@ -39,6 +39,24 @@
     }
   }
 
+  function queueReloadWithFlash(msg, kind = 'success') {
+    try {
+      sessionStorage.setItem('sm_admin_flash', JSON.stringify({ msg, kind }));
+    } catch {}
+    location.reload();
+  }
+
+  try {
+    const rawFlash = sessionStorage.getItem('sm_admin_flash');
+    if (rawFlash) {
+      sessionStorage.removeItem('sm_admin_flash');
+      const parsed = JSON.parse(rawFlash);
+      if (parsed && parsed.msg) {
+        showNotification(parsed.msg, parsed.kind || 'success', false);
+      }
+    }
+  } catch {}
+
   alertCloseBtn?.addEventListener('click', () => {
     if (alertBox) alertBox.hidden = true;
     if (lastTriggerEl && typeof lastTriggerEl.focus === 'function') {
@@ -58,14 +76,85 @@
     });
   }
 
-  // 1. Page Editor Autosave & Unsaved-Change Warning
+  // Native Confirmation Modal Dialog Helper
+  const confirmDialog = document.getElementById('admin-confirm-dialog');
+  const confirmTitle = document.getElementById('admin-confirm-title');
+  const confirmMsg = document.getElementById('admin-confirm-message');
+  const confirmDetails = document.getElementById('admin-confirm-details');
+  const confirmCancel = document.getElementById('admin-confirm-cancel');
+  const confirmProceed = document.getElementById('admin-confirm-proceed');
+  let pendingConfirmAction = null;
+
+  confirmCancel?.addEventListener('click', () => {
+    confirmDialog?.close('cancel');
+  });
+
+  confirmProceed?.addEventListener('click', async () => {
+    if (!pendingConfirmAction) {
+      confirmDialog?.close('cancel');
+      return;
+    }
+    confirmProceed.disabled = true;
+    confirmProceed.setAttribute('aria-busy', 'true');
+    try {
+      await pendingConfirmAction();
+    } finally {
+      confirmProceed.disabled = false;
+      confirmProceed.removeAttribute('aria-busy');
+      pendingConfirmAction = null;
+      confirmDialog?.close('confirm');
+    }
+  });
+
+  confirmDialog?.addEventListener('close', () => {
+    confirmDialog.returnValue = '';
+    pendingConfirmAction = null;
+  });
+
+  function requestConfirmation({ title, message, detailsNode = null, confirmLabel = 'Confirm & Proceed' }, onConfirm) {
+    if (!confirmDialog || typeof confirmDialog.showModal !== 'function') {
+      onConfirm();
+      return;
+    }
+    confirmTitle.textContent = title || 'Confirm Action';
+    confirmMsg.textContent = message || 'Are you sure you want to proceed?';
+    if (confirmProceed) confirmProceed.textContent = confirmLabel;
+    if (confirmDetails) {
+      confirmDetails.textContent = '';
+      if (detailsNode) {
+        confirmDetails.appendChild(detailsNode);
+        confirmDetails.hidden = false;
+      } else {
+        confirmDetails.hidden = true;
+      }
+    }
+    pendingConfirmAction = onConfirm;
+    confirmDialog.showModal();
+  }
+
+  // 1. Page Editor Autosave, SEO Character Guides & Unsaved-Change Warning
   const editorForm = document.getElementById('page-editor-form');
   const autosaveEl = document.getElementById('autosave-status');
   let isDirty = false;
   let autosaveTimer = null;
 
+  document.querySelectorAll('[data-char-target]').forEach((inputEl) => {
+    const counterEl = document.getElementById(inputEl.dataset.charTarget);
+    const maxRec = Number(inputEl.dataset.charRec || 0);
+    if (!counterEl) return;
+    const syncCounter = () => {
+      const len = inputEl.value.length;
+      counterEl.textContent = maxRec ? `${len} / ${maxRec} recommended chars` : `${len} chars`;
+    };
+    inputEl.addEventListener('input', syncCounter);
+    syncCounter();
+  });
+
   if (editorForm) {
     const saveDraft = async (silent = true) => {
+      if (typeof editorForm.reportValidity === 'function' && !silent && !editorForm.reportValidity()) {
+        return false;
+      }
       if (autosaveEl) autosaveEl.textContent = 'Saving...';
       const fd = new FormData(editorForm);
       const body = Object.fromEntries(fd.entries());
@@ -83,12 +172,12 @@
             'error',
             true
           );
-          return;
+          return false;
         }
         if (!res.ok) {
           if (autosaveEl) autosaveEl.textContent = 'Save failed';
           if (!silent) showNotification(data.message || 'Save failed.', 'error', true);
-          return;
+          return false;
         }
         isDirty = false;
         if (data.revision_number) {
@@ -96,10 +185,13 @@
           if (revInput) revInput.value = String(data.revision_number);
         }
         if (autosaveEl) autosaveEl.textContent = `Saved (v${data.revision_number})`;
-        announce('Draft saved');
+        if (!silent) showNotification(`Draft revision v${data.revision_number} saved cleanly.`, 'success', false);
+        else announce('Draft saved');
+        return true;
       } catch {
         if (autosaveEl) autosaveEl.textContent = 'Save failed (network)';
         if (!silent) showNotification('Network error while saving draft. Your edits stay open here.', 'error', true);
+        return false;
       }
     };
 
@@ -123,90 +215,85 @@
     });
 
     document.getElementById('btn-submit-review')?.addEventListener('click', async (e) => {
-      lastTriggerEl = e.currentTarget;
-      await saveDraft(true);
-      const res = await fetch(e.currentTarget.dataset.url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-        body: JSON.stringify({ csrf_token: csrfToken }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        isDirty = false;
-        location.reload();
-      } else {
-        showNotification(data.message || 'Could not submit for review.', 'error', true);
-      }
-    });
-
-    document.getElementById('btn-publish-page')?.addEventListener('click', async (e) => {
-      lastTriggerEl = e.currentTarget;
-      const res = await fetch(e.currentTarget.dataset.url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-        body: JSON.stringify({ csrf_token: csrfToken }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        isDirty = false;
-        location.reload();
-      } else {
-        showNotification(data.message || 'Publish failed.', 'error', true);
-      }
-    });
-
-    document.querySelectorAll('.js-restore-rev').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        lastTriggerEl = btn;
+      const btn = e.currentTarget;
+      lastTriggerEl = btn;
+      btn.disabled = true;
+      btn.setAttribute('aria-busy', 'true');
+      try {
+        await saveDraft(true);
         const res = await fetch(btn.dataset.url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-          body: JSON.stringify({ revision_number: Number(btn.dataset.rev), csrf_token: csrfToken }),
+          body: JSON.stringify({ csrf_token: csrfToken }),
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
           isDirty = false;
-          location.reload();
+          queueReloadWithFlash('Revision submitted for publisher review.');
         } else {
-          showNotification(data.message || 'Restore failed.', 'error', true);
+          showNotification(data.message || 'Could not submit for review.', 'error', true);
         }
+      } finally {
+        btn.disabled = false;
+        btn.removeAttribute('aria-busy');
+      }
+    });
+
+    document.getElementById('btn-publish-page')?.addEventListener('click', (e) => {
+      const btn = e.currentTarget;
+      lastTriggerEl = btn;
+      requestConfirmation(
+        {
+          title: 'Publish Current Revision Live?',
+          message: btn.dataset.confirm || 'This approves the current draft revision and publishes it live to the public website immediately.',
+          confirmLabel: 'Approve & Publish Live',
+        },
+        async () => {
+          const res = await fetch(btn.dataset.url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+            body: JSON.stringify({ csrf_token: csrfToken }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            isDirty = false;
+            queueReloadWithFlash(`Published live to ${data.public_url || 'public site'}.`);
+          } else {
+            showNotification(data.message || 'Publish failed.', 'error', true);
+          }
+        }
+      );
+    });
+
+    document.querySelectorAll('.js-restore-rev').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        lastTriggerEl = btn;
+        requestConfirmation(
+          {
+            title: `Restore v${btn.dataset.rev} to Reviewable Draft?`,
+            message: 'Restoring creates a new Draft revision without immediately publishing or reviving withdrawn claims.',
+            confirmLabel: 'Restore to Draft',
+          },
+          async () => {
+            const res = await fetch(btn.dataset.url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+              body: JSON.stringify({ revision_number: Number(btn.dataset.rev), csrf_token: csrfToken }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+              isDirty = false;
+              queueReloadWithFlash(`Restored revision v${btn.dataset.rev} into new draft v${data.revision_number}.`);
+            } else {
+              showNotification(data.message || 'Restore failed.', 'error', true);
+            }
+          }
+        );
       });
     });
   }
 
   // 2. Native Confirmation Dialog for Media Rights Withdrawal (shows affected placements first!)
-  const confirmDialog = document.getElementById('admin-confirm-dialog');
-  const confirmTitle = document.getElementById('admin-confirm-title');
-  const confirmMsg = document.getElementById('admin-confirm-message');
-  const confirmDetails = document.getElementById('admin-confirm-details');
-  const confirmCancel = document.getElementById('admin-confirm-cancel');
-  const confirmProceed = document.getElementById('admin-confirm-proceed');
-  let pendingConfirmAction = null;
-
-  confirmCancel?.addEventListener('click', () => {
-    confirmDialog?.close('cancel');
-  });
-
-  confirmProceed?.addEventListener('click', async () => {
-    if (!pendingConfirmAction) {
-      confirmDialog?.close('cancel');
-      return;
-    }
-    confirmProceed.disabled = true;
-    try {
-      await pendingConfirmAction();
-    } finally {
-      confirmProceed.disabled = false;
-      pendingConfirmAction = null;
-      confirmDialog?.close('confirm');
-    }
-  });
-
-  confirmDialog?.addEventListener('close', () => {
-    confirmDialog.returnValue = '';
-    pendingConfirmAction = null;
-  });
-
   document.addEventListener('click', async (e) => {
     const withdrawBtn = e.target.closest('.js-withdraw-media-btn');
     if (!withdrawBtn || !confirmDialog) return;
@@ -218,59 +305,58 @@
       const usageData = await usageRes.json().catch(() => ({}));
       const fname = withdrawBtn.dataset.filename || 'this media asset';
 
-      confirmTitle.textContent = `Withdraw Rights for "${fname}"?`;
-      confirmMsg.textContent = usageRes.ok && usageData.totalAffected > 0
+      const msg = usageRes.ok && usageData.totalAffected > 0
         ? `Warning: Withdrawing rights will immediately remove this image from ${usageData.totalAffected} active placement(s) across projects and campaigns.`
         : 'Withdrawing rights disables public delivery for this asset immediately.';
 
-      if (confirmDetails) {
-        confirmDetails.textContent = '';
-        if (usageRes.ok && usageData.totalAffected > 0) {
-          const list = document.createElement('ul');
-          list.style.margin = '0';
-          list.style.paddingInlineStart = '1.2rem';
-          for (const p of usageData.affected.coverProjects || []) {
-            const li = document.createElement('li');
-            li.textContent = `Project Cover: ${p.title} (${p.activation_state})`;
-            list.appendChild(li);
-          }
-          for (const g of usageData.affected.galleryRefs || []) {
-            const li = document.createElement('li');
-            li.textContent = `Project Gallery: ${g.project_title} (${g.activation_state})`;
-            list.appendChild(li);
-          }
-          for (const b of usageData.affected.pairRefs || []) {
-            const li = document.createElement('li');
-            li.textContent = `Before/After Pair "${b.pair_title}" in ${b.project_title}`;
-            list.appendChild(li);
-          }
-          for (const c of usageData.affected.campaignRefs || []) {
-            const li = document.createElement('li');
-            li.textContent = `Campaign "${c.internal_title}" (${c.placement_slot} / ${c.activation_state})`;
-            list.appendChild(li);
-          }
-          confirmDetails.appendChild(list);
-          confirmDetails.hidden = false;
-        } else {
-          confirmDetails.hidden = true;
+      let list = null;
+      if (usageRes.ok && usageData.totalAffected > 0) {
+        list = document.createElement('ul');
+        list.style.margin = '0';
+        list.style.paddingInlineStart = '1.2rem';
+        for (const p of usageData.affected.coverProjects || []) {
+          const li = document.createElement('li');
+          li.textContent = `Project Cover: ${p.title} (${p.activation_state})`;
+          list.appendChild(li);
+        }
+        for (const g of usageData.affected.galleryRefs || []) {
+          const li = document.createElement('li');
+          li.textContent = `Project Gallery: ${g.project_title} (${g.activation_state})`;
+          list.appendChild(li);
+        }
+        for (const b of usageData.affected.pairRefs || []) {
+          const li = document.createElement('li');
+          li.textContent = `Before/After Pair "${b.pair_title}" in ${b.project_title}`;
+          list.appendChild(li);
+        }
+        for (const c of usageData.affected.campaignRefs || []) {
+          const li = document.createElement('li');
+          li.textContent = `Campaign "${c.internal_title}" (${c.placement_slot} / ${c.activation_state})`;
+          list.appendChild(li);
         }
       }
 
-      pendingConfirmAction = async () => {
-        const res = await fetch(withdrawBtn.dataset.withdrawUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-          body: JSON.stringify({ csrf_token: csrfToken }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          location.reload();
-        } else {
-          showNotification(data.message || 'Withdrawal failed.', 'error', true);
+      requestConfirmation(
+        {
+          title: `Withdraw Rights for "${fname}"?`,
+          message: msg,
+          detailsNode: list,
+          confirmLabel: 'Withdraw Rights',
+        },
+        async () => {
+          const res = await fetch(withdrawBtn.dataset.withdrawUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+            body: JSON.stringify({ csrf_token: csrfToken }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            queueReloadWithFlash(data.message || 'Asset rights withdrawn.');
+          } else {
+            showNotification(data.message || 'Withdrawal failed.', 'error', true);
+          }
         }
-      };
-
-      confirmDialog.showModal();
+      );
     } catch {
       showNotification('Could not check media placement dependencies.', 'error', true);
     } finally {
@@ -278,12 +364,10 @@
     }
   });
 
-  // 3. Action Buttons (.js-action-btn)
-  document.addEventListener('click', async (e) => {
-    const btn = e.target.closest('.js-action-btn');
-    if (!btn) return;
-    lastTriggerEl = btn;
+  // 3. Action Buttons (.js-action-btn) with optional data-confirm modal
+  async function runActionButton(btn) {
     btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
     try {
       const res = await fetch(btn.dataset.url, {
         method: 'POST',
@@ -296,8 +380,7 @@
           showNotification(`${data.message} Share securely with the user: ${window.location.origin}${data.setup_url}`, 'success', true);
           return;
         }
-        if (data.message) announce(data.message);
-        location.reload();
+        queueReloadWithFlash(data.message || btn.dataset.successMsg || 'Action completed successfully.');
       } else {
         showNotification(data.message || 'Action failed.', 'error', true);
       }
@@ -305,35 +388,91 @@
       showNotification('Network error while performing action.', 'error', true);
     } finally {
       btn.disabled = false;
+      btn.removeAttribute('aria-busy');
     }
+  }
+
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.js-action-btn');
+    if (!btn) return;
+    lastTriggerEl = btn;
+    if (btn.dataset.confirm) {
+      requestConfirmation(
+        {
+          title: btn.dataset.confirmTitle || 'Confirm Action',
+          message: btn.dataset.confirm,
+          confirmLabel: btn.dataset.confirmLabel || 'Confirm & Proceed',
+        },
+        () => runActionButton(btn)
+      );
+      return;
+    }
+    runActionButton(btn);
   });
 
-  // 4. Generic AJAX Forms (.js-ajax-form)
-  document.querySelectorAll('.js-ajax-form').forEach((form) => {
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      lastTriggerEl = form.querySelector('button[type="submit"]') || form;
+  // 4. Generic AJAX Forms (.js-ajax-form) supporting multi-checkbox arrays + optional data-confirm
+  async function submitAjaxForm(form) {
+    const submitBtn = form.querySelector('button[type="submit"]');
+    lastTriggerEl = submitBtn || form;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.setAttribute('aria-busy', 'true');
+    }
+    try {
       const fd = new FormData(form);
       const body = {};
-      for (const [k, v] of fd.entries()) body[k] = v;
+      const arrayNames = new Set(
+        Array.from(form.querySelectorAll('input[type="checkbox"][data-checkbox-array], input[type="checkbox"][name="extra_roles"]'))
+          .map((cb) => cb.name)
+      );
+      for (const [k, v] of fd.entries()) {
+        if (arrayNames.has(k)) continue;
+        body[k] = v;
+      }
+      for (const name of arrayNames) {
+        body[name] = fd.getAll(name);
+      }
       form.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+        if (arrayNames.has(cb.name)) return;
         body[cb.name] = cb.checked;
       });
-      try {
-        const res = await fetch(form.action, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-          body: JSON.stringify(body),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          location.reload();
-        } else {
-          showNotification(data.message || 'Operation failed.', 'error', true);
-        }
-      } catch {
-        showNotification('Request failed due to network interruption.', 'error', true);
+
+      const res = await fetch(form.action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        queueReloadWithFlash(data.message || form.dataset.successMsg || 'Changes saved successfully.');
+      } else {
+        showNotification(data.message || 'Operation failed.', 'error', true);
       }
+    } catch {
+      showNotification('Request failed due to network interruption.', 'error', true);
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.removeAttribute('aria-busy');
+      }
+    }
+  }
+
+  document.querySelectorAll('.js-ajax-form').forEach((form) => {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (form.dataset.confirm) {
+        requestConfirmation(
+          {
+            title: form.dataset.confirmTitle || 'Confirm Update',
+            message: form.dataset.confirm,
+            confirmLabel: form.dataset.confirmLabel || 'Save Changes',
+          },
+          () => submitAjaxForm(form)
+        );
+        return;
+      }
+      submitAjaxForm(form);
     });
   });
 
@@ -341,7 +480,12 @@
   document.querySelectorAll('.js-multipart-form').forEach((form) => {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      lastTriggerEl = form.querySelector('button[type="submit"]') || form;
+      const submitBtn = form.querySelector('button[type="submit"]');
+      lastTriggerEl = submitBtn || form;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.setAttribute('aria-busy', 'true');
+      }
       try {
         const fd = new FormData(form);
         const res = await fetch(form.action, {
@@ -351,12 +495,17 @@
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          location.reload();
+          queueReloadWithFlash('File uploaded cleanly.');
         } else {
           showNotification(data.message || 'File upload failed.', 'error', true);
         }
       } catch {
         showNotification('File upload interrupted. Please retry.', 'error', true);
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.removeAttribute('aria-busy');
+        }
       }
     });
   });
@@ -367,7 +516,12 @@
   if (mediaForm) {
     mediaForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      lastTriggerEl = mediaForm.querySelector('button[type="submit"]') || mediaForm;
+      const submitBtn = mediaForm.querySelector('button[type="submit"]');
+      lastTriggerEl = submitBtn || mediaForm;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.setAttribute('aria-busy', 'true');
+      }
       if (mediaFeedback) mediaFeedback.textContent = 'Uploading, validating signatures, and stripping metadata...';
       try {
         const fd = new FormData(mediaForm);
@@ -442,7 +596,7 @@
             );
             return;
           }
-          location.reload();
+          queueReloadWithFlash(msg);
         } else {
           const errMsg = data.message || 'Upload failed.';
           if (mediaFeedback) mediaFeedback.textContent = errMsg;
@@ -452,6 +606,11 @@
         const netMsg = 'Upload interrupted. Safe to retry.';
         if (mediaFeedback) mediaFeedback.textContent = netMsg;
         showNotification(netMsg, 'error', true);
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.removeAttribute('aria-busy');
+        }
       }
     });
   }

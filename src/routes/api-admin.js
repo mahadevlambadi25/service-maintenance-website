@@ -11,11 +11,13 @@ import {
   canAccessApplicationRecord,
   canAccessJobRecord,
   encryptMfaSecret,
+  getUserRoles,
   hasPermission,
   issueMfaSetupToken,
   PERMISSIONS,
   recordAudit,
   revokeUserSessions,
+  ROLE_PERMISSION_MAP,
 } from '../services/auth.js';
 import { bumpPublicCache, detectCampaignSlotConflicts, runScheduleEvaluation } from '../services/campaign-engine.js';
 import { recordAnalyticsEvent } from '../services/analytics.js';
@@ -53,7 +55,12 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
   // ============================================================
   const mediaPreviewMatch = pathname.match(/^\/admin\/api\/media\/preview\/([a-zA-Z0-9-]+)$/);
   if (mediaPreviewMatch && req.method === 'GET') {
-    if (!hasPermission(session, PERMISSIONS.EDIT_PROJECTS) && !hasPermission(session, PERMISSIONS.MANAGE_CAMPAIGNS)) {
+    if (
+      !hasPermission(session, PERMISSIONS.EDIT_PROJECTS) &&
+      !hasPermission(session, PERMISSIONS.UPLOAD_PROJECT_MEDIA) &&
+      !hasPermission(session, PERMISSIONS.PUBLISH_PROJECTS) &&
+      !hasPermission(session, PERMISSIONS.MANAGE_CAMPAIGNS)
+    ) {
       sendJson(res, 403, { ok: false, message: 'Forbidden' });
       return true;
     }
@@ -83,6 +90,7 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
   if (mediaUsageMatch && req.method === 'GET') {
     if (
       !hasPermission(session, PERMISSIONS.EDIT_PROJECTS) &&
+      !hasPermission(session, PERMISSIONS.UPLOAD_PROJECT_MEDIA) &&
       !hasPermission(session, PERMISSIONS.PUBLISH_PROJECTS) &&
       !hasPermission(session, PERMISSIONS.MANAGE_CAMPAIGNS)
     ) {
@@ -134,7 +142,12 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
 
   const pageCompareMatch = pathname.match(/^\/admin\/api\/pages\/([a-zA-Z0-9-]+)\/compare$/);
   if (pageCompareMatch && req.method === 'GET') {
-    if (!hasPermission(session, PERMISSIONS.EDIT_CONTENT) && !hasPermission(session, PERMISSIONS.PUBLISH_CONTENT)) {
+    if (
+      !hasPermission(session, PERMISSIONS.VIEW_CONTENT) &&
+      !hasPermission(session, PERMISSIONS.EDIT_CONTENT) &&
+      !hasPermission(session, PERMISSIONS.APPROVE_CONTENT) &&
+      !hasPermission(session, PERMISSIONS.PUBLISH_CONTENT)
+    ) {
       sendJson(res, 403, { ok: false, message: 'Forbidden' });
       return true;
     }
@@ -337,6 +350,78 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
     return true;
   }
 
+  // ============================================================
+  // 3b. SAFE READ-ONLY STAFF USER & ROLE INSPECTION API (GET)
+  // ============================================================
+  if (pathname === '/admin/api/users' && req.method === 'GET') {
+    if (!hasPermission(session, PERMISSIONS.MANAGE_USERS)) {
+      sendJson(res, 403, { ok: false, message: 'Forbidden: Platform Administrator required.' });
+      return true;
+    }
+    const rows = await db
+      .prepare('SELECT user_id, email, full_name, role, extra_roles_json, mfa_enabled, mfa_enrolled, last_login_at, active, created_at, updated_at FROM users ORDER BY active DESC, role ASC, full_name ASC')
+      .all();
+    const safeUsers = rows.map((u) => {
+      const roles = getUserRoles(u);
+      const permissions = Array.from(new Set(roles.flatMap((r) => ROLE_PERMISSION_MAP[r] || [])));
+      return {
+        user_id: u.user_id,
+        email: u.email,
+        full_name: u.full_name,
+        role: u.role,
+        roles,
+        permissions,
+        mfa_enabled: Boolean(u.mfa_enabled),
+        mfa_enrolled: Boolean(u.mfa_enrolled),
+        last_login_at: u.last_login_at || null,
+        active: Boolean(u.active),
+        created_at: u.created_at,
+        updated_at: u.updated_at,
+      };
+    });
+    sendJson(res, 200, { ok: true, users: safeUsers });
+    return true;
+  }
+
+  const userGetDetailMatch = pathname.match(/^\/admin\/api\/users\/([a-zA-Z0-9-]+)$/);
+  if (userGetDetailMatch && req.method === 'GET') {
+    if (!hasPermission(session, PERMISSIONS.MANAGE_USERS)) {
+      sendJson(res, 403, { ok: false, message: 'Forbidden: Platform Administrator required.' });
+      return true;
+    }
+    const targetUser = await db
+      .prepare('SELECT user_id, email, full_name, role, extra_roles_json, mfa_enabled, mfa_enrolled, last_login_at, active, created_at, updated_at FROM users WHERE user_id = ?')
+      .get(userGetDetailMatch[1]);
+    if (!targetUser) {
+      sendJson(res, 404, { ok: false, message: 'Staff user not found.' });
+      return true;
+    }
+    const roles = getUserRoles(targetUser);
+    const permissions = Array.from(new Set(roles.flatMap((r) => ROLE_PERMISSION_MAP[r] || [])));
+    const recentActivity = await db
+      .prepare(`SELECT audit_id, domain, action, object_type, object_id, created_at FROM audit_log WHERE domain != 'hiring' AND (actor_id = ? OR object_id = ?) ORDER BY created_at DESC LIMIT 20`)
+      .all(targetUser.user_id, targetUser.user_id);
+    sendJson(res, 200, {
+      ok: true,
+      user: {
+        user_id: targetUser.user_id,
+        email: targetUser.email,
+        full_name: targetUser.full_name,
+        role: targetUser.role,
+        roles,
+        permissions,
+        mfa_enabled: Boolean(targetUser.mfa_enabled),
+        mfa_enrolled: Boolean(targetUser.mfa_enrolled),
+        last_login_at: targetUser.last_login_at || null,
+        active: Boolean(targetUser.active),
+        created_at: targetUser.created_at,
+        updated_at: targetUser.updated_at,
+      },
+      recentActivity,
+    });
+    return true;
+  }
+
   // All mutating endpoints below must be POST and verify CSRF
   if (req.method !== 'POST') return false;
 
@@ -426,6 +511,34 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
     await db.prepare(`UPDATE page_revisions SET editorial_state = 'In review' WHERE page_id = ? AND revision_number = ?`).run(page.page_id, page.current_revision);
     await recordAudit(db, session, 'content', 'submit_page_review', 'page', page.page_id, { revision: page.current_revision });
     sendJson(res, 200, { ok: true });
+    return true;
+  }
+
+  const pageReturnMatch = pathname.match(/^\/admin\/api\/pages\/([a-zA-Z0-9-]+)\/return-draft$/);
+  if (pageReturnMatch) {
+    if (!hasPermission(session, PERMISSIONS.APPROVE_CONTENT) && !hasPermission(session, PERMISSIONS.PUBLISH_CONTENT)) {
+      sendJson(res, 403, { ok: false, message: 'Forbidden: Approver and Publisher permission required to return revisions.' });
+      return true;
+    }
+    const page = await db.prepare('SELECT * FROM pages WHERE page_id = ?').get(pageReturnMatch[1]);
+    if (!page) {
+      sendJson(res, 404, { ok: false, message: 'Page not found.' });
+      return true;
+    }
+    const reviewComment = String(fields.review_comment || '').trim().slice(0, 500);
+    if (!reviewComment) {
+      sendJson(res, 422, { ok: false, message: 'Review comment is required when returning a revision to Draft.' });
+      return true;
+    }
+    await db.prepare(`UPDATE pages SET editorial_state = 'Draft', updated_at = ? WHERE page_id = ?`).run(nowIso, page.page_id);
+    await db
+      .prepare(`UPDATE page_revisions SET editorial_state = 'Draft', review_comment = ?, approver_id = ? WHERE page_id = ? AND revision_number = ?`)
+      .run(reviewComment, session.user_id, page.page_id, page.current_revision);
+    await recordAudit(db, session, 'content', 'return_page_draft', 'page', page.page_id, {
+      revision: page.current_revision,
+      review_comment: reviewComment,
+    });
+    sendJson(res, 200, { ok: true, editorial_state: 'Draft', revision_number: page.current_revision, review_comment: reviewComment });
     return true;
   }
 
@@ -664,11 +777,12 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
 
   const claimActionMatch = pathname.match(/^\/admin\/api\/claims\/([a-zA-Z0-9-]+)\/(approve|withdraw)$/);
   if (claimActionMatch) {
-    if (!hasPermission(session, PERMISSIONS.PUBLISH_CONTENT)) {
-      sendJson(res, 403, { ok: false, message: 'Forbidden: Publisher approval required.' });
+    const [, claimId, action] = claimActionMatch;
+    const neededClaimPerm = action === 'withdraw' ? PERMISSIONS.PUBLISH_CONTENT : PERMISSIONS.APPROVE_CONTENT;
+    if (!hasPermission(session, neededClaimPerm)) {
+      sendJson(res, 403, { ok: false, message: 'Forbidden: Approver and Publisher permission required.' });
       return true;
     }
-    const [, claimId, action] = claimActionMatch;
     const claim = await db.prepare('SELECT * FROM testimonials_claims WHERE claim_id = ?').get(claimId);
     if (!claim) {
       sendJson(res, 404, { ok: false, message: 'Claim or testimonial not found.' });
@@ -937,7 +1051,7 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
   // 6. PROJECTS & AUTHENTICATED MEDIA PIPELINE
   // ============================================================
   if (pathname === '/admin/api/media/presign') {
-    if (!hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
+    if (!hasPermission(session, PERMISSIONS.UPLOAD_PROJECT_MEDIA) && !hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
       sendJson(res, 403, { ok: false, message: 'Forbidden' });
       return true;
     }
@@ -973,7 +1087,7 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
   }
 
   if (pathname === '/admin/api/media/finalize') {
-    if (!hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
+    if (!hasPermission(session, PERMISSIONS.UPLOAD_PROJECT_MEDIA) && !hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
       sendJson(res, 403, { ok: false, message: 'Forbidden' });
       return true;
     }
@@ -1043,7 +1157,7 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
   }
 
   if (pathname === '/admin/api/media/upload') {
-    if (!hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
+    if (!hasPermission(session, PERMISSIONS.UPLOAD_PROJECT_MEDIA) && !hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
       sendJson(res, 403, { ok: false, message: 'Forbidden' });
       return true;
     }
@@ -1104,7 +1218,7 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
 
   const mediaFocalMatch = pathname.match(/^\/admin\/api\/media\/([a-zA-Z0-9-]+)\/focal-point$/);
   if (mediaFocalMatch) {
-    if (!hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
+    if (!hasPermission(session, PERMISSIONS.UPLOAD_PROJECT_MEDIA) && !hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
       sendJson(res, 403, { ok: false, message: 'Forbidden' });
       return true;
     }
@@ -2019,12 +2133,17 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
     const role = String(fields.role || '').trim();
     const password = String(fields.password || '');
     const extraRolesRaw = Array.isArray(fields.extra_roles)
-      ? fields.extra_roles
+      ? fields.extra_roles.map((s) => String(s || '').trim()).filter(Boolean)
       : String(fields.extra_roles || '')
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean);
-    const extraRoles = extraRolesRaw.filter((r) => validRoles.includes(r) && r !== role);
+    const invalidExtra = extraRolesRaw.filter((r) => !validRoles.includes(r));
+    if (invalidExtra.length > 0) {
+      sendJson(res, 422, { ok: false, message: `Unrecognized role(s): ${invalidExtra.join(', ')}` });
+      return true;
+    }
+    const extraRoles = Array.from(new Set(extraRolesRaw.filter((r) => r !== role)));
 
     if (!isValidEmail(email) || !fullName || !validRoles.includes(role) || password.length < 10) {
       sendJson(res, 422, { ok: false, message: 'Provide a valid email, full name, allowed role, and password (minimum 10 characters).' });
@@ -2047,8 +2166,27 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)`
     ).run(userId, email, fullName, hashPassword(password), role, JSON.stringify(extraRoles), encryptedTotpSecret, mfaEnabled, nowIso, nowIso);
 
-    await recordAudit(db, session, 'users', 'create_user', 'user', userId, { role, extraRoles, mfa_enabled: Boolean(mfaEnabled) });
-    sendJson(res, 201, { ok: true, user_id: userId, totp_secret: totpSecret });
+    const assignedRoles = Array.from(new Set([role, ...extraRoles]));
+    const hiringPrivilegeGranted = assignedRoles.some((r) => r === ROLES.HIRING_OWNER || r === ROLES.HIRING_REVIEWER);
+    const adminPrivilegeGranted = assignedRoles.includes(ROLES.PLATFORM_ADMIN);
+
+    await recordAudit(db, session, 'users', 'create_user', 'user', userId, {
+      role,
+      extraRoles,
+      assigned_roles: assignedRoles,
+      hiring_privilege_granted: hiringPrivilegeGranted,
+      admin_privilege_granted: adminPrivilegeGranted,
+      mfa_enabled: Boolean(mfaEnabled),
+    });
+    sendJson(res, 201, {
+      ok: true,
+      user_id: userId,
+      mfa_enabled: Boolean(mfaEnabled),
+      mfa_enrolled: false,
+      message: mfaEnabled
+        ? `Staff account created for ${email}. Issue a single-use MFA Setup Link from Staff Accounts to authorize Google Authenticator enrollment.`
+        : `Staff account created cleanly for ${email}.`,
+    });
     return true;
   }
 
@@ -2150,15 +2288,26 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
     const extraRolesRaw =
       fields.extra_roles !== undefined
         ? Array.isArray(fields.extra_roles)
-          ? fields.extra_roles
+          ? fields.extra_roles.map((s) => String(s || '').trim()).filter(Boolean)
           : String(fields.extra_roles || '')
               .split(',')
               .map((s) => s.trim())
               .filter(Boolean)
         : JSON.parse(targetUser.extra_roles_json || '[]');
-    const nextExtraRolesJson = JSON.stringify(extraRolesRaw.filter((r) => validRoles.includes(r) && r !== nextRole));
+    const invalidExtra = extraRolesRaw.filter((r) => !validRoles.includes(r));
+    if (invalidExtra.length > 0) {
+      sendJson(res, 422, { ok: false, message: `Unrecognized role(s): ${invalidExtra.join(', ')}` });
+      return true;
+    }
+    const filteredExtra = Array.from(new Set(extraRolesRaw.filter((r) => r !== nextRole)));
+    const nextExtraRolesJson = JSON.stringify(filteredExtra);
     const nextActive =
       fields.active !== undefined ? (fields.active === true || fields.active === 'true' || fields.active === '1' || fields.active === 1 || fields.active === 'on' ? 1 : 0) : targetUser.active;
+
+    if (targetId === session.user_id && nextActive === 0) {
+      sendJson(res, 422, { ok: false, message: 'Cannot deactivate your own active administrator session.' });
+      return true;
+    }
 
     if (targetUser.role === ROLES.PLATFORM_ADMIN && (nextActive === 0 || nextRole !== ROLES.PLATFORM_ADMIN)) {
       const otherAdmins = (await db
@@ -2177,6 +2326,13 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
       return true;
     }
 
+    const prevRoles = getUserRoles(targetUser);
+    const nextRoles = Array.from(new Set([nextRole, ...filteredExtra]));
+    const addedRoles = nextRoles.filter((r) => !prevRoles.includes(r));
+    const removedRoles = prevRoles.filter((r) => !nextRoles.includes(r));
+    const hiringPrivilegeGranted = addedRoles.some((r) => r === ROLES.HIRING_OWNER || r === ROLES.HIRING_REVIEWER);
+    const adminPrivilegeGranted = addedRoles.includes(ROLES.PLATFORM_ADMIN);
+
     const nextPasswordHash = hasNewPass ? hashPassword(String(fields.new_password)) : targetUser.password_hash;
     await db.prepare(
       `UPDATE users SET full_name = ?, role = ?, extra_roles_json = ?, active = ?, password_hash = ?, updated_at = ? WHERE user_id = ?`
@@ -2194,10 +2350,17 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
     await recordAudit(db, session, 'users', 'update_user', 'user', targetId, {
       previous_role: targetUser.role,
       new_role: nextRole,
+      previous_roles: prevRoles,
+      new_roles: nextRoles,
+      added_roles: addedRoles,
+      removed_roles: removedRoles,
+      hiring_privilege_granted: hiringPrivilegeGranted,
+      admin_privilege_granted: adminPrivilegeGranted,
+      self_modified: targetId === session.user_id,
       active: Boolean(nextActive),
       sessions_revoked: roleOrAccessChanged,
     });
-    sendJson(res, 200, { ok: true, sessions_revoked: roleOrAccessChanged });
+    sendJson(res, 200, { ok: true, sessions_revoked: roleOrAccessChanged, roles: nextRoles });
     return true;
   }
 

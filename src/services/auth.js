@@ -20,11 +20,14 @@ import { redactForLog } from '../lib/sanitize.js';
 export const PERMISSIONS = {
   MANAGE_USERS: 'manage_users',
   MANAGE_SETTINGS: 'manage_settings',
+  VIEW_CONTENT: 'view_content',
   EDIT_CONTENT: 'edit_content',
+  APPROVE_CONTENT: 'approve_content',
   PUBLISH_CONTENT: 'publish_content',
   MANAGE_CAMPAIGNS: 'manage_campaigns',
   PUBLISH_CAMPAIGNS: 'publish_campaigns',
   EDIT_PROJECTS: 'edit_projects',
+  UPLOAD_PROJECT_MEDIA: 'upload_project_media',
   PUBLISH_PROJECTS: 'publish_projects',
   MANAGE_VACANCIES: 'manage_vacancies',
   REVIEW_APPLICATIONS: 'review_applications',
@@ -37,24 +40,31 @@ export const PERMISSIONS = {
 
 export const ROLE_PERMISSION_MAP = {
   [ROLES.PLATFORM_ADMIN]: [
+    PERMISSIONS.VIEW_CONTENT,
     PERMISSIONS.MANAGE_USERS,
     PERMISSIONS.MANAGE_SETTINGS,
     PERMISSIONS.MANAGE_LEADS_CRM,
+    PERMISSIONS.VIEW_ANALYTICS,
     PERMISSIONS.VIEW_AUDIT,
     PERMISSIONS.MANAGE_BACKUPS,
-    // Explicitly NO hiring-data access by default per PRD 16.03!
+    // Explicitly NO hiring-data access and NO publish/edit content by default per PRD 16.03!
   ],
   [ROLES.CONTENT_EDITOR]: [
+    PERMISSIONS.VIEW_CONTENT,
     PERMISSIONS.EDIT_CONTENT,
     PERMISSIONS.MANAGE_CAMPAIGNS,
     PERMISSIONS.EDIT_PROJECTS,
+    PERMISSIONS.UPLOAD_PROJECT_MEDIA,
   ],
   [ROLES.APPROVER_PUBLISHER]: [
+    PERMISSIONS.VIEW_CONTENT,
     PERMISSIONS.EDIT_CONTENT,
+    PERMISSIONS.APPROVE_CONTENT,
     PERMISSIONS.PUBLISH_CONTENT,
     PERMISSIONS.MANAGE_CAMPAIGNS,
     PERMISSIONS.PUBLISH_CAMPAIGNS,
     PERMISSIONS.EDIT_PROJECTS,
+    PERMISSIONS.UPLOAD_PROJECT_MEDIA,
     PERMISSIONS.PUBLISH_PROJECTS,
     PERMISSIONS.VIEW_AUDIT,
   ],
@@ -68,6 +78,7 @@ export const ROLE_PERMISSION_MAP = {
   ],
   [ROLES.PROJECT_CONTRIBUTOR]: [
     PERMISSIONS.EDIT_PROJECTS,
+    PERMISSIONS.UPLOAD_PROJECT_MEDIA,
   ],
   [ROLES.ANALYST]: [
     PERMISSIONS.VIEW_ANALYTICS,
@@ -292,7 +303,7 @@ export async function authenticateSession(db, req) {
 
   const row = await db
     .prepare(
-      `SELECT s.*, u.email, u.full_name, u.role, u.extra_roles_json, u.mfa_enabled, u.mfa_enrolled, u.active
+      `SELECT s.*, u.email, u.full_name, u.role, u.extra_roles_json, u.mfa_enabled, u.mfa_enrolled, u.last_login_at, u.active
        FROM sessions s
        JOIN users u ON u.user_id = s.user_id
        WHERE s.session_id = ?`
@@ -347,7 +358,11 @@ export async function createPendingOrVerifiedSession(db, { email, password, totp
 
   if (mfaRequired && user.mfa_enabled && !user.mfa_enrolled) {
     await db
-      .prepare(`UPDATE users SET mfa_enrolled = 1, mfa_enrolled_at = COALESCE(mfa_enrolled_at, ?), updated_at = ? WHERE user_id = ?`)
+      .prepare(`UPDATE users SET mfa_enrolled = 1, mfa_enrolled_at = COALESCE(mfa_enrolled_at, ?), last_login_at = ?, updated_at = ? WHERE user_id = ?`)
+      .run(nowIso, nowIso, nowIso, user.user_id);
+  } else {
+    await db
+      .prepare(`UPDATE users SET last_login_at = ?, updated_at = ? WHERE user_id = ?`)
       .run(nowIso, nowIso, user.user_id);
   }
 
@@ -601,10 +616,10 @@ export async function completeMfaEnrollment(db, { pendingContext, totpCode, ip }
     .prepare(
       `UPDATE users
        SET totp_secret = ?, mfa_pending_secret = NULL, mfa_enabled = 1, mfa_enrolled = 1,
-           mfa_enrolled_at = COALESCE(mfa_enrolled_at, ?), recovery_codes_json = ?, updated_at = ?
+           mfa_enrolled_at = COALESCE(mfa_enrolled_at, ?), last_login_at = ?, recovery_codes_json = ?, updated_at = ?
        WHERE user_id = ?`
     )
-    .run(encryptedConfirmed, nowIso, JSON.stringify(hashedRecoveryCodes), nowIso, user.user_id);
+    .run(encryptedConfirmed, nowIso, nowIso, JSON.stringify(hashedRecoveryCodes), nowIso, user.user_id);
 
   // Revoke any prior sessions across all devices, then issue a fresh verified session
   await revokeUserSessions(db, user.user_id);

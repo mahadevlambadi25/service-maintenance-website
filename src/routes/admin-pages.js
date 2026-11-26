@@ -16,6 +16,7 @@ import {
   clearSessionCookie,
   completeMfaEnrollment,
   createPendingOrVerifiedSession,
+  getUserRoles,
   hasPermission,
   parseCookies,
   PERMISSIONS,
@@ -383,10 +384,25 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
 
   // 2. Staff Preview Mode (/admin/preview) — Desktop / Mobile (390px) & As-Of Phoenix time without firing analytics!
   if (pathname === '/admin/preview') {
+    const projectSlug = urlObj.searchParams.get('project');
+    if (projectSlug) {
+      if (!hasPermission(session, PERMISSIONS.EDIT_PROJECTS) && !hasPermission(session, PERMISSIONS.PUBLISH_PROJECTS)) {
+        forbidden(res, session, session.csrf_token, nonce);
+        return true;
+      }
+    } else if (
+      !hasPermission(session, PERMISSIONS.VIEW_CONTENT) &&
+      !hasPermission(session, PERMISSIONS.EDIT_CONTENT) &&
+      !hasPermission(session, PERMISSIONS.PUBLISH_CONTENT) &&
+      !hasPermission(session, PERMISSIONS.MANAGE_CAMPAIGNS)
+    ) {
+      forbidden(res, session, session.csrf_token, nonce);
+      return true;
+    }
+
     const settings = await getCanonicalSettings(db);
     const asOfParam = urlObj.searchParams.get('asOf');
     const asOfIso = asOfParam ? phoenixLocalToUtcIso(asOfParam) : null;
-    const projectSlug = urlObj.searchParams.get('project');
     const viewport = urlObj.searchParams.get('viewport') === 'mobile' ? 'mobile' : 'desktop';
 
     const buildViewportUrls = () => {
@@ -498,6 +514,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
     const showProjects = hasPermission(session, PERMISSIONS.EDIT_PROJECTS);
     const showHiring = hasPermission(session, PERMISSIONS.MANAGE_VACANCIES) || hasPermission(session, PERMISSIONS.REVIEW_APPLICATIONS);
     const showLeads = hasPermission(session, PERMISSIONS.MANAGE_LEADS_CRM);
+    const showAnalytics = hasPermission(session, PERMISSIONS.VIEW_ANALYTICS);
 
     const stats = {
       showContent,
@@ -505,6 +522,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       showProjects,
       showHiring,
       showLeads,
+      showAnalytics,
       livePages: showContent ? (await db.prepare(`SELECT COUNT(*) as c FROM pages WHERE activation_state = 'Live'`).get()).c : 0,
       inReviewCount: showContent ? (await db.prepare(`SELECT COUNT(*) as c FROM pages WHERE editorial_state = 'In review'`).get()).c : 0,
       liveCampaigns: showCampaigns ? (await db.prepare(`SELECT COUNT(*) as c FROM campaigns WHERE activation_state = 'Live'`).get()).c : 0,
@@ -513,6 +531,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       unassignedApps: showHiring ? (await db.prepare(`SELECT COUNT(*) as c FROM applications WHERE stage = 'Received'`).get()).c : 0,
       newInquiries: showLeads ? (await db.prepare(`SELECT COUNT(*) as c FROM inquiries`).get()).c : 0,
       crmFailed: showLeads ? (await db.prepare(`SELECT COUNT(*) as c FROM crm_delivery_queue WHERE status = 'failed_review'`).get()).c : 0,
+      analyticsEvents: showAnalytics ? (await db.prepare(`SELECT COUNT(*) as c FROM analytics_events`).get()).c : 0,
     };
 
     const schedulerHealth = await db.prepare('SELECT * FROM scheduler_health WHERE id = 1').get();
@@ -535,8 +554,16 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       200,
       renderShell({
         title: 'Dashboard Overview',
+        subtitle: 'Role-filtered operational health, pending reviews, and workspace boundaries.',
         currentSection: 'overview',
-        bodyHtml: AdminViews.renderAdminOverview({ user: session, stats, schedulerHealth, recentAudit, pendingReviews }),
+        bodyHtml: AdminViews.renderAdminOverview({
+          user: session,
+          stats,
+          schedulerHealth,
+          recentAudit,
+          pendingReviews,
+          rolePermissionMap: ROLE_PERMISSION_MAP,
+        }),
       })
     );
     return true;
@@ -544,7 +571,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
 
   // 4. Website & Pages (with search, pagination, revision diff, articles & claims)
   if (pathname === '/admin/pages') {
-    if (!hasPermission(session, PERMISSIONS.EDIT_CONTENT) && !hasPermission(session, PERMISSIONS.MANAGE_SETTINGS)) {
+    if (!hasPermission(session, PERMISSIONS.VIEW_CONTENT) && !hasPermission(session, PERMISSIONS.EDIT_CONTENT)) {
       forbidden(res, session, session.csrf_token, nonce);
       return true;
     }
@@ -589,7 +616,8 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       res,
       200,
       renderShell({
-        title: 'Website & Content Operations',
+        title: 'Pages & Content Operations',
+        subtitle: 'Manage service/property pages, SEO metadata, Insights articles, factual claims, and 301 redirects.',
         currentSection: 'pages',
         bodyHtml: AdminViews.renderAdminPagesView({
           pages: pagedPages.items,
@@ -613,7 +641,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
 
   // 5. Seasonal Campaigns (edit, archive, list + calendar view, conflict & fallback diagnostics)
   if (pathname === '/admin/campaigns') {
-    if (!hasPermission(session, PERMISSIONS.MANAGE_CAMPAIGNS)) {
+    if (!hasPermission(session, PERMISSIONS.MANAGE_CAMPAIGNS) && !hasPermission(session, PERMISSIONS.PUBLISH_CAMPAIGNS)) {
       forbidden(res, session, session.csrf_token, nonce);
       return true;
     }
@@ -665,6 +693,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       200,
       renderShell({
         title: 'Seasonal Campaigns & Highlights',
+        subtitle: 'Schedule website highlights, detect slot priority overlaps, and preview in America/Phoenix time.',
         currentSection: 'campaigns',
         bodyHtml: AdminViews.renderAdminCampaignsView({
           campaigns: pagedCampaigns.items,
@@ -685,7 +714,11 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
 
   // 6. Projects & Media (description editing, gallery order, focal points, usage dependencies)
   if (pathname === '/admin/projects') {
-    if (!hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
+    if (
+      !hasPermission(session, PERMISSIONS.EDIT_PROJECTS) &&
+      !hasPermission(session, PERMISSIONS.UPLOAD_PROJECT_MEDIA) &&
+      !hasPermission(session, PERMISSIONS.PUBLISH_PROJECTS)
+    ) {
       forbidden(res, session, session.csrf_token, nonce);
       return true;
     }
@@ -725,7 +758,8 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       res,
       200,
       renderShell({
-        title: 'Completed Projects & Before/After Media',
+        title: 'Projects & Before/After Media',
+        subtitle: 'Manage completed-work case studies, upload metadata-stripped photography, and verify client rights.',
         currentSection: 'projects',
         bodyHtml: AdminViews.renderAdminProjectsView({
           projects,
@@ -807,13 +841,19 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       selectedApp = { ...selectedApp, snapshot, answers, attachments, notes };
     }
 
-    const reviewers = await db.prepare(`SELECT user_id, full_name, role FROM users WHERE active = 1 AND role IN ('Hiring Owner', 'Hiring Reviewer')`).all();
+    const allActiveUsers = await db
+      .prepare('SELECT user_id, full_name, role, extra_roles_json, active FROM users WHERE active = 1 ORDER BY full_name ASC')
+      .all();
+    const reviewers = allActiveUsers.filter(
+      (u) => hasPermission(u, PERMISSIONS.REVIEW_APPLICATIONS) || hasPermission(u, PERMISSIONS.MANAGE_VACANCIES)
+    );
 
     sendHtml(
       res,
       200,
       renderShell({
-        title: 'Hiring & Protected Applicant Workspace',
+        title: 'Careers & Protected Applications',
+        subtitle: 'Manage authorized job requisitions, Phoenix schedules, and isolated candidate review records.',
         currentSection: 'jobs',
         bodyHtml: AdminViews.renderAdminJobsView({
           jobs,
@@ -873,7 +913,8 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       res,
       200,
       renderShell({
-        title: 'Commercial Leads & CRM Delivery',
+        title: 'Leads & CRM Delivery Queue',
+        subtitle: 'Monitor commercial inquiries, replay Freshsales/M365 deliveries, and access verified inquiry attachments.',
         currentSection: 'leads',
         bodyHtml: AdminViews.renderAdminLeadsView({
           inquiries: pagedInquiries.items,
@@ -892,43 +933,61 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
 
   // 9. Reviews & Activity
   if (pathname === '/admin/reviews') {
-    if (!hasPermission(session, PERMISSIONS.PUBLISH_CONTENT) && !hasPermission(session, PERMISSIONS.VIEW_AUDIT)) {
+    if (
+      !hasPermission(session, PERMISSIONS.APPROVE_CONTENT) &&
+      !hasPermission(session, PERMISSIONS.PUBLISH_CONTENT) &&
+      !hasPermission(session, PERMISSIONS.VIEW_AUDIT)
+    ) {
       forbidden(res, session, session.csrf_token, nonce);
       return true;
     }
     const domainFilter = String(urlObj.searchParams.get('domain') || '').trim();
+    const q = String(urlObj.searchParams.get('q') || '').trim().toLowerCase();
     const logsAll = await db.prepare(`SELECT * FROM audit_log WHERE domain != 'hiring' ORDER BY created_at DESC LIMIT 200`).all();
-    const filteredLogs = domainFilter ? logsAll.filter((l) => l.domain === domainFilter) : logsAll;
+    const filteredLogs = logsAll.filter((l) => {
+      if (domainFilter && l.domain !== domainFilter) return false;
+      if (q && !`${l.actor_name} ${l.domain} ${l.action} ${l.object_type} ${l.object_id}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
     const pagedLogs = paginateRows(filteredLogs, urlObj.searchParams.get('page') || '1', 25);
 
-    const html = `<section class="admin-card">
-      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.75rem;margin-bottom:1rem;">
-        <h2 style="margin:0;">Audit Trail (Non-Hiring Operations)</h2>
-        <form method="GET" action="/admin/reviews" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-          <label for="aud-domain" class="visually-hidden">Domain filter</label>
-          <select id="aud-domain" name="domain" style="min-height:40px;">
-            <option value="">All domains</option>
-            ${['auth', 'users', 'content', 'campaigns', 'projects', 'media', 'crm', 'notifications', 'settings', 'ops']
-              .map((d) => `<option value="${d}"${domainFilter === d ? ' selected' : ''}>${d}</option>`)
-              .join('')}
-          </select>
-          <button type="submit" class="btn btn--secondary" style="min-height:40px;">Filter</button>
-          ${domainFilter ? '<a href="/admin/reviews" class="btn btn--secondary" style="min-height:40px;">Clear</a>' : ''}
-        </form>
-      </div>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="Audit Trail Table">
-        <table class="data-table">
-          <thead><tr><th>Time (Phoenix)</th><th>Actor</th><th>Domain</th><th>Action</th><th>Object</th><th>Details</th></tr></thead>
-          <tbody>${pagedLogs.items
-            .map(
-              (l) => `<tr><td>${escapeHtml(formatPhoenixDateTime(l.created_at, false))}</td><td>${escapeHtml(l.actor_name)} (${escapeHtml(l.actor_role)})</td><td>${escapeHtml(l.domain)}</td><td>${escapeHtml(l.action)}</td><td><code>${escapeHtml(l.object_type)}:${escapeHtml(l.object_id)}</code></td><td><small class="muted">${escapeHtml(l.details_json)}</small></td></tr>`
-            )
-            .join('')}</tbody>
-        </table>
-      </div>
-      ${AdminViews.renderPaginationNav('/admin/reviews', pagedLogs, { domain: domainFilter })}
-    </section>`;
-    sendHtml(res, 200, renderShell({ title: 'Reviews & Activity Audit', currentSection: 'reviews', bodyHtml: html }));
+    const pendingItems = [];
+    if (hasPermission(session, PERMISSIONS.PUBLISH_CONTENT) || hasPermission(session, PERMISSIONS.EDIT_CONTENT)) {
+      const revPages = await db.prepare(`SELECT page_id, slug, title, owner_name, updated_at FROM pages WHERE editorial_state = 'In review' ORDER BY updated_at DESC`).all();
+      for (const p of revPages) {
+        pendingItems.push({ type: 'Page', title: `${p.slug} — ${p.title}`, owner: p.owner_name, updated_at: p.updated_at, href: `/admin/pages?id=${p.page_id}` });
+      }
+      const revArticles = await db.prepare(`SELECT article_id, title, author_name, updated_at FROM articles WHERE editorial_state = 'In review' ORDER BY updated_at DESC`).all();
+      for (const a of revArticles) {
+        pendingItems.push({ type: 'Article', title: a.title, owner: a.author_name, updated_at: a.updated_at, href: `/admin/pages?article=${a.article_id}` });
+      }
+      const revClaims = await db.prepare(`SELECT claim_id, title, owner_name, updated_at FROM testimonials_claims WHERE status IN ('proposed wording', 'evidence needed') ORDER BY updated_at DESC LIMIT 20`).all();
+      for (const c of revClaims) {
+        pendingItems.push({ type: 'Claim/Proof', title: c.title, owner: c.owner_name, updated_at: c.updated_at, href: `/admin/pages?claim=${c.claim_id}` });
+      }
+    }
+    if (hasPermission(session, PERMISSIONS.PUBLISH_PROJECTS) || hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
+      const revProjs = await db.prepare(`SELECT project_id, title, owner_id, updated_at FROM projects WHERE editorial_state = 'In review' ORDER BY updated_at DESC`).all();
+      for (const pr of revProjs) {
+        pendingItems.push({ type: 'Project', title: pr.title, owner: pr.owner_id || 'Contributor', updated_at: pr.updated_at, href: `/admin/projects?id=${pr.project_id}` });
+      }
+    }
+
+    sendHtml(
+      res,
+      200,
+      renderShell({
+        title: 'Reviews & Activity',
+        subtitle: 'Editorial review queue and non-hiring operational audit history.',
+        currentSection: 'reviews',
+        bodyHtml: AdminViews.renderAdminReviewsView({
+          pendingItems,
+          logs: pagedLogs.items,
+          logsMeta: pagedLogs,
+          filters: { domain: domainFilter, q },
+        }),
+      })
+    );
     return true;
   }
 
@@ -944,6 +1003,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       200,
       renderShell({
         title: 'Analytics & Attribution Reporting',
+        subtitle: 'PII-scrubbed funnel performance, campaign engagement, and project publication readiness.',
         currentSection: 'analytics',
         bodyHtml: AdminViews.renderAdminAnalyticsView({ summary }),
       })
@@ -951,9 +1011,82 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
     return true;
   }
 
-  // 11. Settings, Users & Backups
+  // 10b. Users & Roles Management Workspace (Platform Administrator)
+  if (pathname === '/admin/users') {
+    if (!hasPermission(session, PERMISSIONS.MANAGE_USERS)) {
+      forbidden(res, session, session.csrf_token, nonce);
+      return true;
+    }
+    const q = String(urlObj.searchParams.get('q') || '').trim().toLowerCase();
+    const roleFilter = String(urlObj.searchParams.get('role') || '').trim();
+    const statusFilter = String(urlObj.searchParams.get('status') || '').trim();
+    const selectedUserId = String(urlObj.searchParams.get('user') || '').trim();
+    const selectedRoleName = String(urlObj.searchParams.get('roleDetail') || '').trim();
+
+    const allUsers = await db
+      .prepare('SELECT user_id, email, full_name, role, extra_roles_json, mfa_enabled, mfa_enrolled, mfa_enrolled_at, last_login_at, active, created_at, updated_at FROM users ORDER BY active DESC, role ASC, full_name ASC')
+      .all();
+    const sessionRows = await db
+      .prepare('SELECT user_id, COUNT(*) as session_count FROM sessions WHERE expires_at > ? GROUP BY user_id')
+      .all(new Date().toISOString());
+    const activeSessionsMap = Object.fromEntries(sessionRows.map((r) => [r.user_id, r.session_count]));
+
+    const loginRows = await db
+      .prepare(`SELECT actor_id, MAX(created_at) as last_login_at FROM audit_log WHERE domain = 'auth' AND action = 'login_success' GROUP BY actor_id`)
+      .all();
+    const auditLastLoginMap = Object.fromEntries(loginRows.map((r) => [r.actor_id, r.last_login_at]));
+    const lastLoginMap = Object.fromEntries(
+      allUsers.map((u) => [u.user_id, u.last_login_at || auditLastLoginMap[u.user_id] || null])
+    );
+
+    const filteredUsers = allUsers.filter((u) => {
+      const roles = getUserRoles(u);
+      if (roleFilter && !roles.includes(roleFilter)) return false;
+      if (statusFilter === 'active' && !u.active) return false;
+      if (statusFilter === 'revoked' && u.active) return false;
+      if (q && !`${u.full_name} ${u.email} ${roles.join(' ')}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+
+    const selectedUser = allUsers.find((u) => u.user_id === selectedUserId) || null;
+    const userAuditLogs = selectedUser
+      ? await db
+          .prepare(`SELECT * FROM audit_log WHERE domain != 'hiring' AND (actor_id = ? OR object_id = ?) ORDER BY created_at DESC LIMIT 25`)
+          .all(selectedUser.user_id, selectedUser.user_id)
+      : [];
+
+    sendHtml(
+      res,
+      200,
+      renderShell({
+        title: 'Users & Role Access Management',
+        subtitle: 'Manage staff identities, multi-role assignments, session controls, and inspect the PRD permission matrix.',
+        currentSection: 'users',
+        bodyHtml: AdminViews.renderAdminUsersView({
+          users: filteredUsers,
+          allUsers,
+          filters: { q, role: roleFilter, status: statusFilter },
+          selectedUser,
+          selectedRoleName,
+          userAuditLogs,
+          activeSessionsMap,
+          lastLoginMap,
+          rolePermissionMap: ROLE_PERMISSION_MAP,
+          user: session,
+          csrfToken: session.csrf_token,
+        }),
+      })
+    );
+    return true;
+  }
+
+  // 11. Settings & Backups
   if (pathname === '/admin/settings') {
-    if (!hasPermission(session, PERMISSIONS.MANAGE_USERS) && !hasPermission(session, PERMISSIONS.MANAGE_SETTINGS)) {
+    if (
+      !hasPermission(session, PERMISSIONS.MANAGE_SETTINGS) &&
+      !hasPermission(session, PERMISSIONS.MANAGE_BACKUPS) &&
+      !hasPermission(session, PERMISSIONS.MANAGE_USERS)
+    ) {
       forbidden(res, session, session.csrf_token, nonce);
       return true;
     }
@@ -976,7 +1109,8 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       res,
       200,
       renderShell({
-        title: 'Users, Settings & Backups',
+        title: 'Settings, Backups & Governance',
+        subtitle: 'Canonical business identity, company-owned backups, data retention policies, and staff access shortcuts.',
         currentSection: 'settings',
         bodyHtml: AdminViews.renderAdminSettingsView({
           settings,

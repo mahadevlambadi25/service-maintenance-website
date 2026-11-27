@@ -14,6 +14,20 @@ export function renderBreadcrumbs(items) {
   </nav>`;
 }
 
+export function renderFaqAccordion(items = []) {
+  if (!Array.isArray(items) || items.length === 0) return '';
+  return `<div class="faq-list">
+    ${items
+      .map(
+        (f) => `<details class="faq-item">
+          <summary>${escapeHtml(f.q)}</summary>
+          <div class="faq-item__body"><p>${escapeHtml(f.a)}</p></div>
+        </details>`
+      )
+      .join('')}
+  </div>`;
+}
+
 export function renderSeasonalFeatureSlot(campaign) {
   if (!campaign) return '';
   const hasImg = Boolean(campaign.asset && campaign.asset.public_derivative_key);

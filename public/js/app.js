@@ -304,6 +304,196 @@
     timingSel?.addEventListener('change', updateConditionals);
     updateConditionals();
 
+    // 3-step Proposal Form wizard controller (progressive enhancement)
+    const proposalSteps = Array.from(activeForm.querySelectorAll('.proposal-step[data-step]'));
+    const stepperItems = Array.from(document.querySelectorAll('#proposal-stepper [data-step-indicator]'));
+    let currentStep = 1;
+
+    const addDlRow = (dl, label, value) => {
+      if (!dl) return;
+      const wrap = document.createElement('div');
+      const dt = document.createElement('dt');
+      dt.textContent = label;
+      const dd = document.createElement('dd');
+      dd.textContent = value || 'Not provided';
+      wrap.appendChild(dt);
+      wrap.appendChild(dd);
+      dl.appendChild(wrap);
+    };
+
+    const renderProposalReview = () => {
+      if (proposalSteps.length === 0) return;
+      const contactDl = document.getElementById('review-contact-dl');
+      const propDl = document.getElementById('review-property-dl');
+      const condGroup = document.getElementById('review-conditional-group');
+      const condTitle = document.getElementById('review-conditional-title');
+      const condDl = document.getElementById('review-conditional-dl');
+      const scopeDl = document.getElementById('review-scope-dl');
+      if (!contactDl || !propDl || !scopeDl) return;
+
+      const val = (id) => (document.getElementById(id)?.value || '').trim();
+      const selText = (id) => {
+        const el = document.getElementById(id);
+        if (!el || !el.selectedOptions?.length) return '';
+        return el.value ? el.selectedOptions[0].textContent.trim() : '';
+      };
+      const prefMethod = activeForm.querySelector('input[name="preferred_contact_method"]:checked')?.value === 'telephone' ? 'Telephone' : 'Email';
+
+      contactDl.innerHTML = '';
+      addDlRow(contactDl, 'Name', val('name'));
+      addDlRow(contactDl, 'Company / Organization', val('company'));
+      addDlRow(contactDl, 'Preferred Contact', prefMethod);
+      addDlRow(contactDl, 'Email Address', val('email'));
+      addDlRow(contactDl, 'Telephone', val('telephone'));
+
+      propDl.innerHTML = '';
+      addDlRow(propDl, 'Service Needed', selText('service_needed'));
+      addDlRow(propDl, 'Property City or ZIP', val('property_city_or_zip'));
+      addDlRow(propDl, 'Property Type', selText('property_type') || 'Not specified');
+      addDlRow(propDl, 'Desired Timing', selText('desired_timing') || 'Flexible');
+      if (multiCb?.checked) {
+        addDlRow(propDl, 'Multi-Property Portfolio', [val('site_count'), val('coverage_detail')].filter(Boolean).join(' — ') || 'Yes');
+      }
+
+      if (condGroup && condTitle && condDl) {
+        condDl.innerHTML = '';
+        const svc = val('service_needed');
+        if (svc === 'tenant-improvements' || svc === 'tenant-move-outs') {
+          const items = [
+            ['Street Address', val('ti_property_address')],
+            ['Space Condition', selText('ti_occupancy')],
+            ['Plans Status', selText('ti_plans_available')],
+            ['Bid Due Date', val('ti_bid_due_date')],
+            ['Target Window', val('ti_completion_window')],
+            ['Budget Band', val('project_budget') !== 'Not established' ? val('project_budget') : ''],
+            ['Owner / Landlord Contact', val('ti_landlord_involvement')],
+          ].filter(([, v]) => Boolean(v));
+          if (items.length > 0) {
+            condTitle.textContent = 'Tenant Improvement / RFP Details';
+            items.forEach(([k, v]) => addDlRow(condDl, k, v));
+            condGroup.hidden = false;
+          } else {
+            condGroup.hidden = true;
+          }
+        } else if (svc === 'day-porter' || svc === 'recurring-property-care') {
+          const items = [
+            ['Desired Frequency', val('rc_frequency')],
+            ['Site Size / Buildings', val('rc_site_size')],
+            ['Current Arrangement', val('rc_current_arrangement')],
+          ].filter(([, v]) => Boolean(v));
+          if (items.length > 0) {
+            condTitle.textContent = 'Recurring Program Details';
+            items.forEach(([k, v]) => addDlRow(condDl, k, v));
+            condGroup.hidden = false;
+          } else {
+            condGroup.hidden = true;
+          }
+        } else {
+          condGroup.hidden = true;
+        }
+      }
+
+      scopeDl.innerHTML = '';
+      addDlRow(scopeDl, 'Project Description', val('description') || 'Not yet entered');
+      const files = Array.from(document.getElementById('attachments')?.files || []);
+      const fileSummary = files.length
+        ? files.map((f) => `${f.name} (${(f.size / (1024 * 1024)).toFixed(2)} MB)`).join(', ')
+        : 'No files attached';
+      addDlRow(scopeDl, 'Attachments', fileSummary);
+    };
+
+    const showStep = (stepNum, { focusHeading = true } = {}) => {
+      if (proposalSteps.length === 0) return;
+      currentStep = stepNum;
+      proposalSteps.forEach((sec) => {
+        sec.hidden = Number(sec.dataset.step) !== stepNum;
+      });
+      stepperItems.forEach((item) => {
+        const n = Number(item.dataset.stepIndicator);
+        if (n < stepNum) {
+          item.dataset.state = 'done';
+          item.removeAttribute('aria-current');
+        } else if (n === stepNum) {
+          item.dataset.state = 'active';
+          item.setAttribute('aria-current', 'step');
+        } else {
+          item.dataset.state = 'upcoming';
+          item.removeAttribute('aria-current');
+        }
+      });
+      if (stepNum === 3) renderProposalReview();
+      if (focusHeading) {
+        const heading = proposalSteps.find((s) => Number(s.dataset.step) === stepNum)?.querySelector('h2');
+        heading?.focus({ preventScroll: false });
+        document.getElementById('proposal-stepper')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    };
+
+    const validateStepFields = (stepNum) => {
+      const stepEl = proposalSteps.find((s) => Number(s.dataset.step) === stepNum);
+      if (!stepEl) return true;
+      const summary = document.getElementById('form-error-summary');
+      const errorList = document.getElementById('form-error-list');
+      if (summary) summary.hidden = true;
+      const invalid = [];
+      for (const el of stepEl.querySelectorAll('input, select, textarea')) {
+        if (!el.willValidate) continue;
+        if (!el.checkValidity()) {
+          el.classList.add('user-invalid-fallback');
+          syncAria(el);
+          invalid.push(el);
+        }
+      }
+      if (invalid.length > 0 && summary && errorList) {
+        errorList.innerHTML = '';
+        for (const el of invalid) {
+          const li = document.createElement('li');
+          const a = document.createElement('a');
+          a.href = `#${el.id}`;
+          const labelText = el.labels?.[0]?.textContent?.replace('*', '').trim() || el.name;
+          a.textContent = `${labelText}: ${el.validationMessage}`;
+          a.addEventListener('click', (ev) => { ev.preventDefault(); el.focus(); });
+          li.appendChild(a);
+          errorList.appendChild(li);
+        }
+        summary.hidden = false;
+        summary.focus();
+        return false;
+      }
+      return true;
+    };
+
+    if (proposalSteps.length > 0) {
+      showStep(1, { focusHeading: false });
+      activeForm.addEventListener('click', (ev) => {
+        const nextBtn = ev.target.closest('[data-next-step]');
+        if (nextBtn) {
+          const targetStep = Number(nextBtn.dataset.nextStep);
+          if (validateStepFields(currentStep)) {
+            showStep(targetStep);
+          }
+          return;
+        }
+        const prevBtn = ev.target.closest('[data-prev-step]');
+        if (prevBtn) {
+          const summary = document.getElementById('form-error-summary');
+          if (summary) summary.hidden = true;
+          showStep(Number(prevBtn.dataset.prevStep));
+          return;
+        }
+        const gotoBtn = ev.target.closest('[data-goto-step]');
+        if (gotoBtn) {
+          showStep(Number(gotoBtn.dataset.gotoStep));
+        }
+      });
+      activeForm.addEventListener('input', () => {
+        if (currentStep === 3) renderProposalReview();
+      });
+      activeForm.addEventListener('change', () => {
+        if (currentStep === 3) renderProposalReview();
+      });
+    }
+
     // Client-side file pre-check for proposal attachments
     const attachInput = document.getElementById('attachments');
     const uploadStatus = document.getElementById('upload-status');
@@ -346,6 +536,10 @@
       }
 
       if (invalidFields.length > 0 && summary && errorList) {
+        const firstStep = invalidFields[0].closest('.proposal-step[data-step]');
+        if (firstStep && proposalSteps.length > 0) {
+          showStep(Number(firstStep.dataset.step), { focusHeading: false });
+        }
         errorList.innerHTML = '';
         for (const el of invalidFields) {
           const li = document.createElement('li');
@@ -448,12 +642,16 @@
         }
 
         if (res.status === 422 && data.errors && summary && errorList) {
+          let firstTargetStep = null;
           errorList.innerHTML = '';
           for (const [field, msg] of Object.entries(data.errors)) {
             const target = activeForm.querySelector(`[name="${field}"]`);
             if (target) {
               target.classList.add('user-invalid-fallback');
               syncAria(target);
+              if (!firstTargetStep) {
+                firstTargetStep = target.closest('.proposal-step[data-step]');
+              }
             }
             const li = document.createElement('li');
             const a = document.createElement('a');
@@ -461,6 +659,9 @@
             a.textContent = msg;
             li.appendChild(a);
             errorList.appendChild(li);
+          }
+          if (firstTargetStep && proposalSteps.length > 0) {
+            showStep(Number(firstTargetStep.dataset.step), { focusHeading: false });
           }
           summary.hidden = false;
           summary.focus();

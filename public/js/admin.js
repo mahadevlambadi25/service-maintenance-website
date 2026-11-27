@@ -334,7 +334,7 @@
         if (pageId) {
           document.querySelectorAll('[data-page-id].is-selected').forEach((el) => el.classList.remove('is-selected'));
           document.querySelectorAll(`[data-page-id="${CSS.escape(pageId)}"]`).forEach((el) => {
-            if (el.tagName === 'TR' || el.classList.contains('admin-mobile-card')) {
+            if (el.tagName === 'TR' || el.classList.contains('admin-mobile-card') || el.classList.contains('admin-page-card')) {
               el.classList.add('is-selected');
             }
           });
@@ -343,6 +343,7 @@
           window.history.replaceState(null, '', cleanUrl);
         }
         initPageEditorBindings();
+        nextPanel.scrollTop = 0;
         if (window.innerWidth < 1120) {
           nextPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
@@ -517,6 +518,21 @@
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
+      if (data.setup_url && form.id === 'create-user-form') {
+        const box = document.getElementById('onboarding-link-box');
+        const inp = document.getElementById('onboarding-link-input');
+        const meta = document.getElementById('onboarding-link-meta');
+        if (box && inp && meta) {
+          const fullUrl = data.full_setup_url && data.full_setup_url.startsWith('http')
+            ? data.full_setup_url
+            : `${window.location.origin}${data.setup_url}`;
+          inp.value = fullUrl;
+          meta.textContent = `Single-use onboarding link (expires ${data.expires_at || 'soon'}). Share securely—it will not be shown again.`;
+          box.hidden = false;
+          showNotification(data.message || 'Onboarding link ready to copy.', res.ok ? 'success' : 'error', true);
+          return;
+        }
+      }
       if (res.ok) {
         queueReloadWithFlash(data.message || form.dataset.successMsg || 'Changes saved successfully.');
       } else {
@@ -548,6 +564,62 @@
       }
       submitAjaxForm(form);
     });
+  });
+
+  function wireCopyButton(btnId, inputId) {
+    const btn = document.getElementById(btnId);
+    const inp = document.getElementById(inputId);
+    if (!btn || !inp) return;
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(inp.value);
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy Setup Link'; }, 2000);
+      } catch {
+        inp.select();
+        document.execCommand('copy');
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy Setup Link'; }, 2000);
+      }
+    });
+  }
+  wireCopyButton('btn-copy-onboarding-link', 'onboarding-link-input');
+  wireCopyButton('btn-copy-edit-onboarding-link', 'edit-onboarding-link-input');
+
+  document.addEventListener('click', async (e) => {
+    const inviteBtn = e.target.closest('.js-invite-btn');
+    if (!inviteBtn) return;
+    lastTriggerEl = inviteBtn;
+    const delivery = inviteBtn.dataset.delivery || 'manual';
+    inviteBtn.disabled = true;
+    inviteBtn.setAttribute('aria-busy', 'true');
+    try {
+      const res = await fetch(inviteBtn.dataset.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+        body: JSON.stringify({ csrf_token: csrfToken, delivery_method: delivery }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.setup_url) {
+        const box = document.getElementById('edit-onboarding-link-box');
+        const inp = document.getElementById('edit-onboarding-link-input');
+        const meta = document.getElementById('edit-onboarding-link-meta');
+        if (box && inp && meta) {
+          const fullUrl = data.full_setup_url && data.full_setup_url.startsWith('http')
+            ? data.full_setup_url
+            : `${window.location.origin}${data.setup_url}`;
+          inp.value = fullUrl;
+          meta.textContent = `Single-use link (${data.purpose || 'setup'}, expires ${data.expires_at || 'soon'}). Previous unused links were invalidated.`;
+          box.hidden = false;
+        }
+      }
+      showNotification(data.message || (res.ok ? 'Invitation processed.' : 'Invitation failed.'), res.ok ? 'success' : 'error', true);
+    } catch {
+      showNotification('Network error while issuing setup link.', 'error', true);
+    } finally {
+      inviteBtn.disabled = false;
+      inviteBtn.removeAttribute('aria-busy');
+    }
   });
 
   const editUserForm = document.getElementById('edit-user-form');
@@ -646,101 +718,200 @@
     });
   });
 
-  // 6. Batch Media Upload (#media-upload-form)
-  const mediaForm = document.getElementById('media-upload-form');
-  const mediaFeedback = document.getElementById('media-upload-feedback');
-  if (mediaForm) {
-    mediaForm.addEventListener('submit', async (e) => {
+  // Lead Details Modal (#admin-lead-dialog)
+  const leadDialog = document.getElementById('admin-lead-dialog');
+  const leadDialogClose = document.getElementById('lead-dialog-close');
+  leadDialogClose?.addEventListener('click', () => leadDialog?.close());
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.js-lead-detail-btn');
+    if (!btn || !leadDialog) return;
+    let lead = null;
+    try {
+      lead = JSON.parse(btn.dataset.lead || '{}');
+    } catch {
+      return;
+    }
+    const titleEl = document.getElementById('lead-dialog-title');
+    const kindEl = document.getElementById('lead-dialog-kind');
+    const dl = document.getElementById('lead-dialog-dl');
+    if (titleEl) titleEl.textContent = lead.org_name || 'Inquiry Details';
+    if (kindEl) kindEl.textContent = `${lead.kind || 'Inquiry'} · ${(lead.inquiry_id || '').slice(0, 8)}`;
+    if (dl) {
+      dl.innerHTML = '';
+      const addItem = (label, val, { full = false, href = '' } = {}) => {
+        const wrap = document.createElement('div');
+        if (full) wrap.className = 'lead-detail-dl__full';
+        const dt = document.createElement('dt');
+        dt.textContent = label;
+        const dd = document.createElement('dd');
+        if (href && val) {
+          const a = document.createElement('a');
+          a.href = href;
+          a.textContent = val;
+          dd.appendChild(a);
+        } else {
+          dd.textContent = val || '—';
+        }
+        wrap.appendChild(dt);
+        wrap.appendChild(dd);
+        dl.appendChild(wrap);
+      };
+      addItem('Contact Name', lead.name);
+      addItem('Preferred Method', lead.preferred_contact_method);
+      addItem('Email', lead.email, { href: lead.email ? `mailto:${lead.email}` : '' });
+      addItem('Telephone', lead.telephone, { href: lead.telephone ? `tel:${lead.telephone}` : '' });
+      addItem('Service Requested', lead.service);
+      addItem('Property Location', lead.prop_loc);
+      addItem('Property Type', lead.property_type);
+      addItem('Desired Timing', lead.desired_timing);
+      addItem('Pipeline Stage', `${lead.classification} · ${lead.status}`);
+      addItem('Received (Phoenix)', lead.received_at);
+      addItem('Project Description', lead.description, { full: true });
+    }
+    if (typeof leadDialog.showModal === 'function') leadDialog.showModal();
+  });
+
+  // ============================================================
+  // Phase 1: Projects & Media (Dropzone, 4-Step Create, 5-Tab Edit)
+  // ============================================================
+  const wireDropzone = (inputEl, previewContainer, onSelect) => {
+    if (!inputEl || !previewContainer) return;
+    const box = inputEl.closest('.dropzone-box');
+    const renderFiles = (files) => {
+      previewContainer.innerHTML = '';
+      const arr = Array.from(files || []);
+      if (arr.length === 0) {
+        previewContainer.hidden = true;
+        return;
+      }
+      previewContainer.hidden = false;
+      arr.forEach((f) => {
+        const card = document.createElement('div');
+        card.className = 'dropzone-preview-item';
+        const img = document.createElement('img');
+        img.alt = f.name;
+        const reader = new FileReader();
+        reader.onload = () => {
+          img.src = String(reader.result || '');
+        };
+        reader.readAsDataURL(f);
+        const name = document.createElement('span');
+        name.textContent = f.name;
+        name.style.overflow = 'hidden';
+        name.style.textOverflow = 'ellipsis';
+        name.style.whiteSpace = 'nowrap';
+        card.appendChild(img);
+        card.appendChild(name);
+        previewContainer.appendChild(card);
+      });
+    };
+    inputEl.addEventListener('change', () => {
+      renderFiles(inputEl.files);
+      if (onSelect) onSelect(inputEl.files);
+    });
+    if (box) {
+      box.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        box.classList.add('is-dragover');
+      });
+      box.addEventListener('dragleave', () => box.classList.remove('is-dragover'));
+      box.addEventListener('drop', (e) => {
+        e.preventDefault();
+        box.classList.remove('is-dragover');
+        if (e.dataTransfer?.files?.length) {
+          inputEl.files = e.dataTransfer.files;
+          renderFiles(inputEl.files);
+          if (onSelect) onSelect(inputEl.files);
+        }
+      });
+    }
+  };
+
+  // Wire reusable dropzone upload forms (#media-upload-form, #proj-media-upload-form)
+  document.querySelectorAll('.js-media-dropzone-form').forEach((form) => {
+    const fileInput = form.querySelector('input[type="file"]');
+    const previewBox = form.querySelector('.dropzone-previews');
+    const feedback = form.querySelector('[id$="-upload-feedback"]');
+    const submitBtn = form.querySelector('button[type="submit"]');
+    wireDropzone(fileInput, previewBox);
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const submitBtn = mediaForm.querySelector('button[type="submit"]');
-      lastTriggerEl = submitBtn || mediaForm;
+      if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+        if (feedback) feedback.textContent = 'Select at least one photo first.';
+        showNotification('Select at least one photo before uploading.', 'error', true);
+        return;
+      }
       if (submitBtn) {
         submitBtn.disabled = true;
         submitBtn.setAttribute('aria-busy', 'true');
       }
-      if (mediaFeedback) mediaFeedback.textContent = 'Uploading, validating signatures, and stripping metadata...';
+      if (feedback) feedback.textContent = 'Uploading photos and stripping EXIF/GPS metadata...';
       try {
-        const fd = new FormData(mediaForm);
-        const fileInput = mediaForm.querySelector('input[type="file"]');
-        const rawFiles = Array.from(fileInput?.files || []).filter((f) => f && f.size > 0);
+        const fd = new FormData(form);
+        const rawFiles = Array.from(fileInput.files || []).filter((f) => f && f.size > 0);
         let res;
-
-        if (rawFiles.length > 0) {
-          const presignRes = await fetch('/admin/api/media/presign', {
+        const presignRes = await fetch('/admin/api/media/presign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+          body: JSON.stringify({
+            csrf_token: csrfToken,
+            files: rawFiles.map((f) => ({ name: f.name, size: f.size, type: f.type || 'application/octet-stream' })),
+          }),
+        });
+        const presignData = await presignRes.json().catch(() => ({}));
+        if (!presignRes.ok) {
+          throw new Error(presignData.message || 'Upload pre-check failed.');
+        }
+        if (presignData.mode === 's3_presigned_put' && Array.isArray(presignData.uploads)) {
+          if (feedback) feedback.textContent = 'Uploading original image(s) directly to object storage...';
+          const stagedFiles = [];
+          for (let idx = 0; idx < presignData.uploads.length; idx++) {
+            const u = presignData.uploads[idx];
+            const fileObj = rawFiles[idx];
+            const putRes = await fetch(u.url, {
+              method: 'PUT',
+              headers: u.headers || { 'Content-Type': fileObj.type || 'application/octet-stream' },
+              body: fileObj,
+            });
+            if (!putRes.ok) throw new Error(`Direct S3 upload failed for ${fileObj.name} (${putRes.status}).`);
+            stagedFiles.push({ stagingKey: u.stagingKey, originalName: u.originalName });
+          }
+          if (feedback) feedback.textContent = 'Processing EXIF orientation and responsive WebP/JPEG variants...';
+          res = await fetch('/admin/api/media/finalize', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
             body: JSON.stringify({
               csrf_token: csrfToken,
-              files: rawFiles.map((f) => ({ name: f.name, size: f.size, type: f.type || 'application/octet-stream' })),
+              alt_text: String(fd.get('alt_text') || ''),
+              rights_owner: String(fd.get('rights_owner') || 'Internal'),
+              staged_files: stagedFiles,
             }),
           });
-          const presignData = await presignRes.json().catch(() => ({}));
-          if (!presignRes.ok) {
-            throw new Error(presignData.message || 'Upload pre-check failed.');
-          }
-
-          if (presignData.mode === 's3_presigned_put' && Array.isArray(presignData.uploads)) {
-            if (mediaFeedback) mediaFeedback.textContent = 'Uploading original image(s) directly to object storage...';
-            const stagedFiles = [];
-            for (let idx = 0; idx < presignData.uploads.length; idx++) {
-              const u = presignData.uploads[idx];
-              const fileObj = rawFiles[idx];
-              const putRes = await fetch(u.url, {
-                method: 'PUT',
-                headers: u.headers || { 'Content-Type': fileObj.type || 'application/octet-stream' },
-                body: fileObj,
-              });
-              if (!putRes.ok) {
-                throw new Error(`Direct S3 upload failed for ${fileObj.name} (${putRes.status}).`);
-              }
-              stagedFiles.push({ stagingKey: u.stagingKey, originalName: u.originalName });
-            }
-            if (mediaFeedback) mediaFeedback.textContent = 'Processing EXIF orientation and responsive WebP/JPEG variants...';
-            res = await fetch('/admin/api/media/finalize', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-              body: JSON.stringify({
-                csrf_token: csrfToken,
-                alt_text: String(fd.get('alt_text') || ''),
-                rights_owner: String(fd.get('rights_owner') || 'Internal'),
-                staged_files: stagedFiles,
-              }),
-            });
-          } else {
-            res = await fetch(mediaForm.action, {
-              method: 'POST',
-              headers: { 'X-CSRF-Token': csrfToken },
-              body: fd,
-            });
-          }
         } else {
-          res = await fetch(mediaForm.action, {
+          res = await fetch(form.action, {
             method: 'POST',
-            headers: { 'X-CSRF-Token': csrfToken },
             body: fd,
+            headers: { 'x-csrf-token': csrfToken, Accept: 'application/json' },
+            credentials: 'same-origin',
           });
         }
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          const msg = `Uploaded ${data.accepted?.length || 0} file(s). Rejected: ${data.rejected?.length || 0}.`;
-          if (mediaFeedback) mediaFeedback.textContent = msg;
+          const uploadedCount = data.accepted?.length ?? data.assets?.length ?? 0;
+          const msg = data.message || `Uploaded ${uploadedCount} photo(s). Rejected: ${data.rejected?.length || 0}.`;
           if (data.rejected?.length) {
-            showNotification(
-              `${msg} Rejected: ${data.rejected.map((r) => `${r.name} (${r.message})`).join('; ')}`,
-              'error',
-              true
-            );
+            showNotification(`${msg} Rejected: ${data.rejected.map((r) => `${r.name} (${r.message})`).join('; ')}`, 'error', true);
             return;
           }
           queueReloadWithFlash(msg);
         } else {
           const errMsg = data.message || 'Upload failed.';
-          if (mediaFeedback) mediaFeedback.textContent = errMsg;
+          if (feedback) feedback.textContent = errMsg;
           showNotification(errMsg, 'error', true);
         }
-      } catch {
-        const netMsg = 'Upload interrupted. Safe to retry.';
-        if (mediaFeedback) mediaFeedback.textContent = netMsg;
+      } catch (err) {
+        const netMsg = err?.message || 'Upload interrupted. Safe to retry.';
+        if (feedback) feedback.textContent = netMsg;
         showNotification(netMsg, 'error', true);
       } finally {
         if (submitBtn) {
@@ -748,6 +919,283 @@
           submitBtn.removeAttribute('aria-busy');
         }
       }
+    });
+  });
+
+  // Guided 4-Step Create Project Wizard
+  const createWizard = document.getElementById('project-create-wizard');
+  if (createWizard) {
+    const steps = Array.from(createWizard.querySelectorAll('.wizard-step[data-wiz-step]'));
+    const indicators = Array.from(document.querySelectorAll('#project-create-stepper [data-wiz-ind]'));
+    const errBox = document.getElementById('project-create-error');
+    const errText = document.getElementById('project-create-error-text');
+    const titleInput = document.getElementById('wiz-title');
+    const slugInput = document.getElementById('wiz-slug');
+    let slugTouched = false;
+    let wizStep = 1;
+
+    slugInput?.addEventListener('input', () => {
+      slugTouched = true;
+    });
+    titleInput?.addEventListener('input', () => {
+      if (!slugTouched && slugInput) {
+        slugInput.value = titleInput.value
+          .toLowerCase()
+          .trim()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 80);
+      }
+    });
+
+    wireDropzone(document.getElementById('wiz-before-file'), document.getElementById('wiz-before-preview'));
+    wireDropzone(document.getElementById('wiz-after-file'), document.getElementById('wiz-after-preview'));
+
+    const renderWizReview = () => {
+      const box = document.getElementById('wiz-review-box');
+      if (!box) return;
+      const g = (id) => (document.getElementById(id)?.value || '').trim();
+      const bFile = document.getElementById('wiz-before-file')?.files?.[0]?.name;
+      const aFile = document.getElementById('wiz-after-file')?.files?.[0]?.name;
+      box.innerHTML = '';
+      const dl = document.createElement('dl');
+      dl.className = 'lead-detail-dl';
+      [
+        ['Project Title', g('wiz-title')],
+        ['Property Type', g('wiz-prop')],
+        ['Location', g('wiz-city')],
+        ['Completion Date', g('wiz-comp')],
+        ['Challenge', g('wiz-chal')],
+        ['Agreed Scope', g('wiz-scope')],
+        ['Before Photo', bFile || 'None selected'],
+        ['After Photo', aFile || 'None selected'],
+      ].forEach(([k, v]) => {
+        const w = document.createElement('div');
+        const dt = document.createElement('dt');
+        dt.textContent = k;
+        const dd = document.createElement('dd');
+        dd.textContent = v || '—';
+        w.appendChild(dt);
+        w.appendChild(dd);
+        dl.appendChild(w);
+      });
+      box.appendChild(dl);
+    };
+
+    const showWizStep = (n) => {
+      wizStep = n;
+      if (errBox) errBox.hidden = true;
+      steps.forEach((s) => {
+        s.hidden = Number(s.dataset.wizStep) !== n;
+      });
+      indicators.forEach((ind) => {
+        const idx = Number(ind.dataset.wizInd);
+        ind.dataset.state = idx < n ? 'done' : idx === n ? 'active' : 'upcoming';
+        if (idx === n) ind.setAttribute('aria-current', 'step');
+        else ind.removeAttribute('aria-current');
+      });
+      if (n === 4) renderWizReview();
+    };
+
+    const validateWizStep = (n) => {
+      const stepEl = steps.find((s) => Number(s.dataset.wizStep) === n);
+      if (!stepEl) return true;
+      for (const el of stepEl.querySelectorAll('input, select, textarea')) {
+        if (!el.willValidate) continue;
+        if (!el.checkValidity()) {
+          if (errBox && errText) {
+            const label = el.labels?.[0]?.textContent?.replace('*', '').trim() || el.name;
+            errText.textContent = `${label}: ${el.validationMessage}`;
+            errBox.hidden = false;
+          }
+          el.focus();
+          return false;
+        }
+      }
+      return true;
+    };
+
+    createWizard.addEventListener('click', (e) => {
+      const next = e.target.closest('[data-wiz-next]');
+      if (next) {
+        if (validateWizStep(wizStep)) showWizStep(Number(next.dataset.wizNext));
+        return;
+      }
+      const prev = e.target.closest('[data-wiz-prev]');
+      if (prev) showWizStep(Number(prev.dataset.wizPrev));
+    });
+
+    const submitCreateProject = async (opts = {}) => {
+      const isEarly = Boolean(opts.allowEarlyStep1);
+      if (!validateWizStep(1)) return;
+      if (!isEarly && !validateWizStep(2)) return;
+
+      const submitBtn = document.getElementById('wiz-submit-btn');
+      const earlyBtn = document.getElementById('wiz-save-draft-early');
+      const step1DraftBtn = document.getElementById('wiz-save-draft-step1');
+      if (submitBtn) submitBtn.disabled = true;
+      if (earlyBtn) earlyBtn.disabled = true;
+      if (step1DraftBtn) step1DraftBtn.disabled = true;
+
+      try {
+        const fd = new FormData(createWizard);
+        const body = Object.fromEntries(fd.entries());
+        if (!body.challenge) body.challenge = 'Initial project draft initiated.';
+        if (!body.agreed_scope) body.agreed_scope = 'Scope to be finalized in project details.';
+        if (!body.completed_work) body.completed_work = 'Work details in progress.';
+
+        const res = await fetch('/admin/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken, Accept: 'application/json' },
+          body: JSON.stringify(body),
+          credentials: 'same-origin',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.project_id) {
+          throw new Error(data.message || 'Could not create project draft.');
+        }
+        const projectId = data.project_id;
+
+        // Also persist permissions/result fields if filled
+        if (!isEarly) {
+          await fetch(`/admin/api/projects/${encodeURIComponent(projectId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken, Accept: 'application/json' },
+            body: JSON.stringify({
+              title: body.title,
+              property_type: body.property_type,
+              city_region: body.city_region,
+              completion_date: body.completion_date,
+              challenge: body.challenge,
+              agreed_scope: body.agreed_scope,
+              completed_work: body.completed_work,
+              verified_result: body.verified_result || 'Completed agreed scope',
+              self_performed_notes: body.self_performed_notes || 'In-house work',
+              coordinated_notes: body.coordinated_notes || 'Coordinated trades where applicable',
+              related_services: body.related_services || '',
+              naming_decision: body.naming_decision || 'anonymized',
+              completion_documented: Boolean(document.getElementById('wiz-doc')?.checked),
+              client_permission_verified: Boolean(document.getElementById('wiz-perm')?.checked),
+              is_private_test: Boolean(document.getElementById('wiz-test')?.checked),
+            }),
+            credentials: 'same-origin',
+          });
+        }
+
+        // Upload optional Before/After photos and create pair if both provided
+        const bFile = document.getElementById('wiz-before-file')?.files?.[0];
+        const aFile = document.getElementById('wiz-after-file')?.files?.[0];
+        const uploadSingle = async (file, alt) => {
+          const ufd = new FormData();
+          ufd.append('csrf_token', csrfToken);
+          ufd.append('rights_owner', 'Service Maintenance / Client Approved');
+          ufd.append('alt_text', alt);
+          ufd.append('photos', file);
+          const ur = await fetch('/admin/api/media/upload', {
+            method: 'POST',
+            body: ufd,
+            headers: { 'x-csrf-token': csrfToken, Accept: 'application/json' },
+            credentials: 'same-origin',
+          });
+          const ud = await ur.json().catch(() => ({}));
+          return ud.accepted?.[0]?.asset_id || ud.assets?.[0]?.asset_id || null;
+        };
+
+        let beforeId = null;
+        let afterId = null;
+        if (bFile) beforeId = await uploadSingle(bFile, `${body.title} — Before`);
+        if (aFile) afterId = await uploadSingle(aFile, `${body.title} — After`);
+        if (beforeId && afterId) {
+          await fetch(`/admin/api/projects/${encodeURIComponent(projectId)}/pairs`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken, Accept: 'application/json' },
+            body: JSON.stringify({
+              pair_title: document.getElementById('wiz-pair-title')?.value.trim() || `${body.title} Comparison`,
+              before_asset_id: beforeId,
+              after_asset_id: afterId,
+              before_caption: document.getElementById('wiz-before-cap')?.value.trim() || 'Before work',
+              after_caption: document.getElementById('wiz-after-cap')?.value.trim() || 'After completion',
+            }),
+            credentials: 'same-origin',
+          });
+        }
+
+        window.location.assign(`/admin/projects?view=edit&id=${encodeURIComponent(projectId)}`);
+      } catch (err) {
+        if (errBox && errText) {
+          errText.textContent = err?.message || 'Error creating project draft.';
+          errBox.hidden = false;
+        }
+        if (submitBtn) submitBtn.disabled = false;
+        if (earlyBtn) earlyBtn.disabled = false;
+        const step1Btn = document.getElementById('wiz-save-draft-step1');
+        if (step1Btn) step1Btn.disabled = false;
+      }
+    };
+
+    document.getElementById('wiz-save-draft-step1')?.addEventListener('click', () => submitCreateProject({ allowEarlyStep1: true }));
+    document.getElementById('wiz-save-draft-early')?.addEventListener('click', () => submitCreateProject({ allowEarlyStep1: false }));
+    createWizard.addEventListener('submit', (e) => {
+      e.preventDefault();
+      submitCreateProject({ allowEarlyStep1: false });
+    });
+  }
+
+  // 5-Tab Edit Project Controller + Dirty Guard + Live Thumbnails
+  const projectEditForm = document.getElementById('project-edit-form');
+  if (projectEditForm) {
+    const tabBtns = Array.from(document.querySelectorAll('#project-edit-tabs [data-project-tab]'));
+    const tabPanels = Array.from(document.querySelectorAll('.project-tab-panel[data-project-panel]'));
+    const dirtyBadge = document.getElementById('project-dirty-badge');
+    let projectDirty = false;
+
+    const switchProjectTab = (name) => {
+      tabBtns.forEach((b) => b.classList.toggle('is-active', b.dataset.projectTab === name));
+      tabPanels.forEach((p) => {
+        p.hidden = p.dataset.projectPanel !== name;
+      });
+    };
+
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-project-tab], .js-switch-project-tab');
+      if (!btn) return;
+      const target = btn.dataset.projectTab || btn.dataset.targetTab;
+      if (target) switchProjectTab(target);
+    });
+
+    projectEditForm.addEventListener('input', () => {
+      projectDirty = true;
+      if (dirtyBadge) dirtyBadge.hidden = false;
+    });
+    projectEditForm.addEventListener('change', () => {
+      projectDirty = true;
+      if (dirtyBadge) dirtyBadge.hidden = false;
+    });
+    projectEditForm.addEventListener('submit', () => {
+      projectDirty = false;
+      if (dirtyBadge) dirtyBadge.hidden = true;
+    });
+    window.addEventListener('beforeunload', (e) => {
+      if (projectDirty) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
+
+    // Live Cover Photo thumbnail preview
+    const coverSel = document.getElementById('sp-cover');
+    const coverPrev = document.getElementById('sp-cover-preview');
+    coverSel?.addEventListener('change', () => {
+      if (!coverPrev) return;
+      coverPrev.src = coverSel.value ? `/admin/api/media/preview/${encodeURIComponent(coverSel.value)}` : '/assets/brand-mark.svg';
+    });
+
+    // Live Before/After pair thumbnail previews
+    document.querySelectorAll('.js-pair-preview-sel').forEach((sel) => {
+      sel.addEventListener('change', () => {
+        const img = document.getElementById(sel.dataset.previewTarget);
+        if (img && sel.value) img.src = `/admin/api/media/preview/${encodeURIComponent(sel.value)}`;
+      });
     });
   }
 })();

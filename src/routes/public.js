@@ -518,7 +518,12 @@ export async function handlePublicRoute(req, res, db, urlObj, nonce, storagePath
   if (projectMatch) {
     const slug = projectMatch[1];
     const project = await db
-      .prepare(`SELECT * FROM projects WHERE slug = ? AND editorial_state = 'Approved' AND activation_state = 'Live' AND is_private_test = 0`)
+      .prepare(
+        `SELECT p.*, m.public_derivative_key as cover_derivative_key, m.variants_json as cover_variants_json, m.alt_text as cover_alt, m.focal_x as cover_focal_x, m.focal_y as cover_focal_y
+         FROM projects p
+         LEFT JOIN media_assets m ON m.asset_id = p.cover_asset_id AND m.rights_status = 'approved' AND m.is_public_published = 1
+         WHERE p.slug = ? AND p.editorial_state = 'Approved' AND p.activation_state = 'Live' AND p.is_private_test = 0`
+      )
       .get(slug);
     if (project) {
       const pairs = await db

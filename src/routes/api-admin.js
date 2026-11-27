@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { ENV, ROLES, STORAGE_PATHS, UPLOAD_LIMITS } from '../config.js';
-import { generateTotpSecret, generateUuid, hashPassword } from '../lib/crypto.js';
+import { generateTotpSecret, generateUuid, hashPassword, randomToken } from '../lib/crypto.js';
 import { processPrivateDocumentUploadAsync, processProjectImageUploadAsync } from '../lib/media-processor.js';
 import { parseRequestBody } from '../lib/multipart.js';
 import { buildSafeCsv, isSafeUrl, sanitizeRichHtml } from '../lib/sanitize.js';
@@ -10,6 +10,7 @@ import {
   authenticateSession,
   canAccessApplicationRecord,
   canAccessJobRecord,
+  checkRateLimit,
   encryptMfaSecret,
   getUserRoles,
   hasPermission,
@@ -23,6 +24,7 @@ import { bumpPublicCache, detectCampaignSlotConflicts, runScheduleEvaluation } f
 import { recordAnalyticsEvent } from '../services/analytics.js';
 import { createFullBackup, restoreFromBackup, verifyBackupIntegrity } from '../services/backup-service.js';
 import { setCrmFaultMode, syncDealMilestoneToFreshsales } from '../services/crm-adapter.js';
+import { getMailerStatus, sendEmailViaMicrosoftGraph } from '../services/mailer.js';
 import { processDeliveryQueues } from '../services/delivery-worker.js';
 import { createObjectStore } from '../services/object-store.js';
 import { approveRetentionPolicy, runRetentionSweep } from '../services/retention-service.js';
@@ -1455,18 +1457,44 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
     return true;
   }
 
-  const projPublishMatch = pathname.match(/^\/admin\/api\/projects\/([a-zA-Z0-9-]+)\/(publish|archive)$/);
+  const projPublishMatch = pathname.match(/^\/admin\/api\/projects\/([a-zA-Z0-9-]+)\/(publish|archive|submit-review|return-draft)$/);
   if (projPublishMatch) {
-    if (!hasPermission(session, PERMISSIONS.PUBLISH_PROJECTS)) {
-      sendJson(res, 403, { ok: false, message: 'Forbidden: Approver and Publisher permission required.' });
-      return true;
-    }
-    const proj = await db.prepare('SELECT * FROM projects WHERE project_id = ?').get(projPublishMatch[1]);
+    const [, projId, action] = projPublishMatch;
+    const proj = await db.prepare('SELECT * FROM projects WHERE project_id = ?').get(projId);
     if (!proj) {
       sendJson(res, 404, { ok: false, message: 'Project not found.' });
       return true;
     }
-    if (projPublishMatch[2] === 'archive') {
+
+    if (action === 'submit-review') {
+      if (!hasPermission(session, PERMISSIONS.EDIT_PROJECTS)) {
+        sendJson(res, 403, { ok: false, message: 'Forbidden: Edit projects permission required to submit for review.' });
+        return true;
+      }
+      await db.prepare(`UPDATE projects SET editorial_state = 'In review', updated_at = ? WHERE project_id = ?`).run(nowIso, proj.project_id);
+      await bumpPublicCache(db);
+      await recordAudit(db, session, 'projects', 'submit_project_review', 'project', proj.project_id);
+      sendJson(res, 200, { ok: true, message: 'Project submitted for publisher review.' });
+      return true;
+    }
+
+    if (action === 'return-draft') {
+      if (!hasPermission(session, PERMISSIONS.PUBLISH_PROJECTS)) {
+        sendJson(res, 403, { ok: false, message: 'Forbidden: Approver and Publisher permission required to return projects.' });
+        return true;
+      }
+      await db.prepare(`UPDATE projects SET editorial_state = 'Draft', activation_state = 'Unpublished', updated_at = ? WHERE project_id = ?`).run(nowIso, proj.project_id);
+      await bumpPublicCache(db);
+      await recordAudit(db, session, 'projects', 'return_project_draft', 'project', proj.project_id);
+      sendJson(res, 200, { ok: true, message: 'Project returned to Draft status.' });
+      return true;
+    }
+
+    if (!hasPermission(session, PERMISSIONS.PUBLISH_PROJECTS)) {
+      sendJson(res, 403, { ok: false, message: 'Forbidden: Approver and Publisher permission required.' });
+      return true;
+    }
+    if (action === 'archive') {
       (await db.prepare(`UPDATE projects SET activation_state = 'Archived', updated_at = ? WHERE project_id = ?`).run(nowIso, proj.project_id));
       await bumpPublicCache(db);
       await recordAudit(db, session, 'projects', 'archive_project', 'project', proj.project_id);
@@ -2135,6 +2163,16 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
     const fullName = String(fields.full_name || '').trim();
     const role = String(fields.role || '').trim();
     const password = String(fields.password || '');
+    const rawOnboardingMode = String(fields.onboarding_mode || '').trim().toLowerCase();
+    const onboardingMode =
+      rawOnboardingMode === 'email'
+        ? 'email'
+        : rawOnboardingMode === 'manual'
+          ? 'manual'
+          : password
+            ? 'password'
+            : 'manual';
+
     const extraRolesRaw = Array.isArray(fields.extra_roles)
       ? fields.extra_roles.map((s) => String(s || '').trim()).filter(Boolean)
       : String(fields.extra_roles || '')
@@ -2148,10 +2186,28 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
     }
     const extraRoles = Array.from(new Set(extraRolesRaw.filter((r) => r !== role)));
 
-    if (!isValidEmail(email) || !fullName || !validRoles.includes(role) || password.length < 10) {
-      sendJson(res, 422, { ok: false, message: 'Provide a valid email, full name, allowed role, and password (minimum 10 characters).' });
+    if (!isValidEmail(email) || !fullName || !validRoles.includes(role)) {
+      sendJson(res, 422, { ok: false, message: 'Provide a valid email, full name, and allowed role.' });
       return true;
     }
+    if (onboardingMode === 'password' && password.length < 10) {
+      sendJson(res, 422, { ok: false, message: 'Password must be at least 10 characters.' });
+      return true;
+    }
+    if (onboardingMode === 'email' && !getMailerStatus().configured) {
+      sendJson(res, 422, {
+        ok: false,
+        message: 'Microsoft 365 email is not configured. Select Manual Invitation to generate a copyable setup link instead.',
+      });
+      return true;
+    }
+
+    const rl = checkRateLimit(`admin_invite:${session.user_id}`, 30, 60_000);
+    if (!rl.allowed) {
+      sendJson(res, 429, { ok: false, message: `Too many user onboarding requests. Wait ${rl.retryAfterSec}s.` });
+      return true;
+    }
+
     const existingUser = await db.prepare('SELECT 1 FROM users WHERE email = ?').get(email);
     if (existingUser) {
       sendJson(res, 409, { ok: false, message: 'A staff account with this email already exists.' });
@@ -2161,13 +2217,27 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
     const totpSecret = generateTotpSecret();
     const encryptedTotpSecret = encryptMfaSecret(totpSecret);
     const mfaEnabled = fields.mfa_enabled === false || fields.mfa_enabled === 'false' || fields.mfa_enabled === '0' ? 0 : 1;
+    const mustSetPassword = onboardingMode === 'manual' || onboardingMode === 'email' ? 1 : 0;
+    const initialPasswordHash = hashPassword(mustSetPassword ? randomToken(32) : password);
 
     await db.prepare(
       `INSERT INTO users (
         user_id, email, full_name, password_hash, role, extra_roles_json,
-        totp_secret, mfa_enabled, mfa_enrolled, active, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)`
-    ).run(userId, email, fullName, hashPassword(password), role, JSON.stringify(extraRoles), encryptedTotpSecret, mfaEnabled, nowIso, nowIso);
+        totp_secret, mfa_enabled, mfa_enrolled, must_set_password, active, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1, ?, ?)`
+    ).run(
+      userId,
+      email,
+      fullName,
+      initialPasswordHash,
+      role,
+      JSON.stringify(extraRoles),
+      encryptedTotpSecret,
+      mfaEnabled,
+      mustSetPassword,
+      nowIso,
+      nowIso
+    );
 
     const assignedRoles = Array.from(new Set([role, ...extraRoles]));
     const hiringPrivilegeGranted = assignedRoles.some((r) => r === ROLES.HIRING_OWNER || r === ROLES.HIRING_REVIEWER);
@@ -2180,7 +2250,98 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
       hiring_privilege_granted: hiringPrivilegeGranted,
       admin_privilege_granted: adminPrivilegeGranted,
       mfa_enabled: Boolean(mfaEnabled),
+      onboarding_mode: onboardingMode,
+      must_set_password: Boolean(mustSetPassword),
     });
+
+    if (onboardingMode === 'manual' || onboardingMode === 'email') {
+      const ttlMinutes = onboardingMode === 'email' ? 1440 : 60;
+      const tokenRes = await issueMfaSetupToken(db, {
+        userId,
+        purpose: 'first_time_enroll',
+        issuedBy: session.user_id,
+        ttlMinutes,
+      });
+      if (!tokenRes.ok) {
+        sendJson(res, tokenRes.status || 422, { ok: false, message: tokenRes.error });
+        return true;
+      }
+      const setupPath = `/admin/mfa-setup?token=${tokenRes.rawToken}`;
+      const baseOrigin = String(ENV.BASE_URL || '').replace(/\/+$/, '');
+      const fullSetupUrl = baseOrigin ? `${baseOrigin}${setupPath}` : setupPath;
+
+      if (onboardingMode === 'email') {
+        const mailRes = await sendEmailViaMicrosoftGraph({
+          to: email,
+          subject: 'Service Maintenance — Complete Your Staff Account & MFA Setup',
+          bodyText: [
+            `Hello ${fullName},`,
+            '',
+            'A staff account has been created for you on the Service Maintenance Staff Dashboard.',
+            'Use the single-use onboarding link below to create your password (minimum 10 characters), link Google Authenticator, and save your 8 backup recovery codes:',
+            '',
+            fullSetupUrl,
+            '',
+            `This link expires at ${tokenRes.expiresAt} (UTC) and can only be used once.`,
+          ].join('\n'),
+        });
+        await recordAudit(
+          db,
+          session,
+          'users',
+          mailRes.ok ? 'onboarding_invite_email_sent' : 'onboarding_invite_email_failed',
+          'user',
+          userId,
+          {
+            token_id: tokenRes.tokenId,
+            delivery_method: 'm365_email',
+            expires_at: tokenRes.expiresAt,
+            provider_message_id: mailRes.providerMessageId || null,
+          }
+        );
+        if (!mailRes.ok) {
+          sendJson(res, 502, {
+            ok: false,
+            email_failed: true,
+            user_id: userId,
+            setup_url: setupPath,
+            full_setup_url: fullSetupUrl,
+            expires_at: tokenRes.expiresAt,
+            message: `Staff account created, but Microsoft 365 email failed (${mailRes.error}). You can copy the single-use setup link below manually.`,
+          });
+          return true;
+        }
+        sendJson(res, 201, {
+          ok: true,
+          user_id: userId,
+          onboarding_mode: 'email',
+          expires_at: tokenRes.expiresAt,
+          mfa_enabled: Boolean(mfaEnabled),
+          mfa_enrolled: false,
+          message: `Staff account created and onboarding email sent to ${email} via Microsoft 365.`,
+        });
+        return true;
+      }
+
+      await recordAudit(db, session, 'users', 'onboarding_invite_manual_issued', 'user', userId, {
+        token_id: tokenRes.tokenId,
+        delivery_method: 'manual',
+        expires_at: tokenRes.expiresAt,
+      });
+      sendJson(res, 201, {
+        ok: true,
+        user_id: userId,
+        onboarding_mode: 'manual',
+        setup_url: setupPath,
+        full_setup_url: fullSetupUrl,
+        expires_at: tokenRes.expiresAt,
+        mfa_enabled: Boolean(mfaEnabled),
+        mfa_enrolled: false,
+        message: `Staff account created for ${email}. Copy the single-use setup link below (valid for 60 minutes).`,
+      });
+      return true;
+    }
+
     sendJson(res, 201, {
       ok: true,
       user_id: userId,
@@ -2199,29 +2360,107 @@ export async function handleAdminApi(req, res, db, urlObj, storagePaths = STORAG
       sendJson(res, 403, { ok: false, message: 'Forbidden: Platform Administrator required.' });
       return true;
     }
+    const rl = checkRateLimit(`admin_invite:${session.user_id}`, 30, 60_000);
+    if (!rl.allowed) {
+      sendJson(res, 429, { ok: false, message: `Too many setup link requests. Wait ${rl.retryAfterSec}s.` });
+      return true;
+    }
     const targetId = mfaRecoveryMatch[1];
-    const targetUser = await db.prepare('SELECT user_id, email, mfa_enrolled, active FROM users WHERE user_id = ?').get(targetId);
+    const targetUser = await db
+      .prepare('SELECT user_id, email, full_name, mfa_enrolled, must_set_password, active FROM users WHERE user_id = ?')
+      .get(targetId);
     if (!targetUser || !targetUser.active) {
       sendJson(res, 404, { ok: false, message: 'Active staff account not found.' });
       return true;
     }
+    const deliveryMethod = String(fields.delivery_method || 'manual').trim().toLowerCase() === 'email' ? 'email' : 'manual';
+    if (deliveryMethod === 'email' && !getMailerStatus().configured) {
+      sendJson(res, 422, {
+        ok: false,
+        message: 'Microsoft 365 email is not configured. Use Manual Setup Link instead.',
+      });
+      return true;
+    }
     const purpose = targetUser.mfa_enrolled ? 'recovery' : 'first_time_enroll';
+    const ttlMinutes = deliveryMethod === 'email' ? 1440 : 60;
     const tokenRes = await issueMfaSetupToken(db, {
       userId: targetUser.user_id,
       purpose,
       issuedBy: session.user_id,
-      ttlMinutes: 15,
+      ttlMinutes,
     });
     if (!tokenRes.ok) {
       sendJson(res, tokenRes.status || 422, { ok: false, message: tokenRes.error });
       return true;
     }
+    const setupPath = `/admin/mfa-setup?token=${tokenRes.rawToken}`;
+    const baseOrigin = String(ENV.BASE_URL || '').replace(/\/+$/, '');
+    const fullSetupUrl = baseOrigin ? `${baseOrigin}${setupPath}` : setupPath;
+
+    if (deliveryMethod === 'email') {
+      const mailRes = await sendEmailViaMicrosoftGraph({
+        to: targetUser.email,
+        subject:
+          purpose === 'recovery'
+            ? 'Service Maintenance — MFA Recovery Link'
+            : 'Service Maintenance — Complete Your Staff Account & MFA Setup',
+        bodyText: [
+          `Hello ${targetUser.full_name},`,
+          '',
+          targetUser.must_set_password
+            ? 'Use this single-use link to create your password and enroll Google Authenticator:'
+            : 'Use this single-use link to set up or recover Google Authenticator on your account:',
+          '',
+          fullSetupUrl,
+          '',
+          `This link expires at ${tokenRes.expiresAt} (UTC), replaces any earlier unused links, and can only be used once.`,
+        ].join('\n'),
+      });
+      await recordAudit(
+        db,
+        session,
+        'users',
+        mailRes.ok ? 'onboarding_invite_email_resent' : 'onboarding_invite_email_failed',
+        'user',
+        targetUser.user_id,
+        {
+          token_id: tokenRes.tokenId,
+          purpose: tokenRes.purpose,
+          delivery_method: 'm365_email',
+          expires_at: tokenRes.expiresAt,
+          provider_message_id: mailRes.providerMessageId || null,
+        }
+      );
+      if (!mailRes.ok) {
+        sendJson(res, 502, {
+          ok: false,
+          email_failed: true,
+          purpose: tokenRes.purpose,
+          expires_at: tokenRes.expiresAt,
+          setup_url: setupPath,
+          full_setup_url: fullSetupUrl,
+          message: `Microsoft 365 email failed (${mailRes.error}). Any older unused link was invalidated; you can copy this new link manually.`,
+        });
+        return true;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        delivery_method: 'email',
+        purpose: tokenRes.purpose,
+        expires_at: tokenRes.expiresAt,
+        message: `Single-use ${purpose === 'recovery' ? 'recovery' : 'onboarding'} email sent to ${targetUser.email} via Microsoft 365.`,
+      });
+      return true;
+    }
+
     sendJson(res, 200, {
       ok: true,
+      delivery_method: 'manual',
       purpose: tokenRes.purpose,
       expires_at: tokenRes.expiresAt,
-      setup_url: `/admin/mfa-setup?token=${tokenRes.rawToken}`,
-      message: `Single-use 15-minute MFA ${purpose === 'recovery' ? 'recovery' : 'setup'} link issued for ${targetUser.email}.`,
+      setup_url: setupPath,
+      full_setup_url: fullSetupUrl,
+      message: `Single-use 60-minute MFA ${purpose === 'recovery' ? 'recovery' : 'setup'} link issued for ${targetUser.email}.`,
     });
     return true;
   }

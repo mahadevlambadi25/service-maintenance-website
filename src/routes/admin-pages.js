@@ -28,6 +28,7 @@ import {
 import { getAnalyticsSummary } from '../services/analytics.js';
 import { detectCampaignSlotConflicts, resolveActiveCampaigns } from '../services/campaign-engine.js';
 import { getCrmFaultMode } from '../services/crm-adapter.js';
+import { getMailerStatus } from '../services/mailer.js';
 import * as AdminViews from '../views/admin-views.js';
 import { renderPublicLayout } from '../views/layout.js';
 import * as PublicPages from '../views/public-pages.js';
@@ -151,6 +152,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       let email = existingSession?.email || '';
       let tokenPurpose = '';
       let validSetupToken = '';
+      let mustSetPassword = false;
       let status = 200;
 
       if (queryToken) {
@@ -162,8 +164,10 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
           validSetupToken = queryToken;
           tokenPurpose = check.tokenRow.purpose;
           email = check.tokenRow.email;
-          info =
-            tokenPurpose === 'first_time_enroll'
+          mustSetPassword = Boolean(check.tokenRow.must_set_password);
+          info = mustSetPassword
+            ? 'Onboarding link verified. Create your password (minimum 10 characters) to generate your Google Authenticator QR code.'
+            : tokenPurpose === 'first_time_enroll'
               ? 'First-time authenticator setup link verified. Confirm your account password to generate your Google Authenticator QR code.'
               : 'Administrator recovery link verified. Confirm your password to re-enroll a new authenticator device.';
         }
@@ -180,6 +184,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
           email,
           setupToken: validSetupToken,
           tokenPurpose,
+          mustSetPassword,
           signedInUser: existingSession,
           csrfToken: csrfTok,
           nonce,
@@ -213,6 +218,8 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
         const resBegin = await beginMfaEnrollment(db, {
           email: fields.email,
           password: fields.password,
+          newPassword: fields.new_password,
+          confirmPassword: fields.confirm_password,
           setupToken: fields.setup_token,
           recoveryCode: fields.recovery_code,
           currentTotp: fields.current_totp,
@@ -229,6 +236,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
               error: resBegin.error,
               email: fields.email || existingSession?.email || '',
               setupToken: fields.setup_token || '',
+              mustSetPassword: Boolean(resBegin.mustSetPassword || fields.must_set_password === '1'),
               signedInUser: existingSession,
               csrfToken: nextCsrf,
               nonce,
@@ -629,12 +637,118 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       }
     }
 
+    const isContributorOnly =
+      showProjects && !showContent && !showCampaigns && !showHiring && !showLeads && !showAnalytics;
+
+    let contributorData = null;
+    if (isContributorOnly) {
+      const allProjects = await db.prepare('SELECT * FROM projects ORDER BY updated_at DESC').all();
+      const allMedia = await db.prepare('SELECT asset_id, rights_status FROM media_assets').all();
+      const mediaRightsById = Object.fromEntries(allMedia.map((m) => [m.asset_id, m.rights_status]));
+
+      const enriched = [];
+      const tasks = [];
+      for (const p of allProjects) {
+        const galItems = await db.prepare('SELECT asset_id FROM project_gallery_items WHERE project_id = ?').all(p.project_id);
+        const pairs = await db.prepare('SELECT before_asset_id, after_asset_id FROM project_before_after_pairs WHERE project_id = ?').all(p.project_id);
+        const photoCount = galItems.length + (p.cover_asset_id ? 1 : 0);
+        const pairCount = pairs.length;
+        enriched.push({ ...p, photoCount, pairCount });
+
+        if (p.activation_state !== 'Live' && p.activation_state !== 'Archived' && tasks.length < 6) {
+          const usedIds = [
+            p.cover_asset_id,
+            ...galItems.map((g) => g.asset_id),
+            ...pairs.flatMap((pr) => [pr.before_asset_id, pr.after_asset_id]),
+          ].filter(Boolean);
+          const pendingMediaCount = usedIds.filter((id) => mediaRightsById[id] && mediaRightsById[id] !== 'approved').length;
+
+          if (photoCount === 0 && pairCount === 0) {
+            tasks.push({
+              title: `Add Before & After photos to "${p.title}"`,
+              detail: 'Projects need documented photos before they can be reviewed.',
+              badge: 'Photos Needed',
+              badgeTone: 'warn',
+              href: `/admin/projects?view=edit&tab=photos&id=${encodeURIComponent(p.project_id)}`,
+              cta: 'Add Photos',
+            });
+          } else if (pairCount === 0) {
+            tasks.push({
+              title: `Create a Before/After pair for "${p.title}"`,
+              detail: 'Pair pre-work and completed photos side by side.',
+              badge: 'Pairing',
+              badgeTone: 'warn',
+              href: `/admin/projects?view=edit&tab=photos&id=${encodeURIComponent(p.project_id)}`,
+              cta: 'Pair Photos',
+            });
+          } else if (!p.completion_documented) {
+            tasks.push({
+              title: `Confirm completion evidence for "${p.title}"`,
+              detail: 'Verify work order or completion sign-off in Permissions & Evidence.',
+              badge: 'Evidence',
+              badgeTone: 'warn',
+              href: `/admin/projects?view=edit&tab=permissions&id=${encodeURIComponent(p.project_id)}`,
+              cta: 'Review',
+            });
+          } else if (!p.client_permission_verified) {
+            tasks.push({
+              title: `Verify client naming & photo permission for "${p.title}"`,
+              detail: 'Confirm anonymization or written naming approval.',
+              badge: 'Permission',
+              badgeTone: 'warn',
+              href: `/admin/projects?view=edit&tab=permissions&id=${encodeURIComponent(p.project_id)}`,
+              cta: 'Verify',
+            });
+          } else if (pendingMediaCount > 0) {
+            tasks.push({
+              title: `${pendingMediaCount} photo(s) awaiting rights approval on "${p.title}"`,
+              detail: 'An Approver & Publisher must approve photo rights before publishing.',
+              badge: 'Awaiting Rights',
+              badgeTone: 'neutral',
+              href: `/admin/projects?view=edit&tab=publish&id=${encodeURIComponent(p.project_id)}`,
+              cta: 'View Status',
+            });
+          } else if (!p.is_private_test) {
+            tasks.push({
+              title: `Ready for publisher review: "${p.title}"`,
+              detail: 'All evidence, photos, and permissions are complete.',
+              badge: 'Ready',
+              badgeTone: 'live',
+              href: `/admin/projects?view=edit&tab=publish&id=${encodeURIComponent(p.project_id)}`,
+              cta: 'Check Readiness',
+            });
+          }
+        }
+      }
+
+      const myProjects = enriched.filter((p) => p.owner_id === session.user_id);
+      const draftProjects = enriched.filter((p) => p.editorial_state === 'Draft');
+      const awaitingReview = enriched.filter(
+        (p) => p.editorial_state === 'In review' || (p.editorial_state === 'Approved' && p.activation_state !== 'Live')
+      );
+      const pendingPhotos = allMedia.filter((m) => m.rights_status === 'pending').length;
+
+      contributorData = {
+        kpis: {
+          myProjectsCount: myProjects.length,
+          totalProjectsCount: enriched.length,
+          draftCount: draftProjects.length,
+          awaitingReviewCount: awaitingReview.length,
+          pendingPhotosCount: pendingPhotos,
+        },
+        recentProjects: (myProjects.length > 0 ? myProjects : enriched).slice(0, 5),
+        tasks,
+      };
+    }
+
     sendHtml(
       res,
       200,
       renderShell({
-        title: 'Dashboard Overview',
-        subtitle: 'Your daily priorities, work awaiting review, and quick shortcuts for your role.',
+        title: isContributorOnly ? 'Project Contributor Workspace' : 'Dashboard Overview',
+        subtitle: isContributorOnly
+          ? 'Document completed commercial projects, upload Before/After photos, and prepare drafts for publishing review.'
+          : 'Your daily priorities, work awaiting review, and quick shortcuts for your role.',
         currentSection: 'overview',
         bodyHtml: AdminViews.renderAdminOverview({
           user: session,
@@ -645,6 +759,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
           pendingReviews,
           expiringItems,
           rolePermissionMap: ROLE_PERMISSION_MAP,
+          contributorData,
         }),
       })
     );
@@ -818,14 +933,28 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
     }
     const q = String(urlObj.searchParams.get('q') || '').trim().toLowerCase();
     const stateFilter = String(urlObj.searchParams.get('state') || '').trim();
+    const reqView = String(urlObj.searchParams.get('view') || 'overview');
+    const view = ['overview', 'create', 'edit', 'media'].includes(reqView) ? reqView : 'overview';
+    const tab = String(urlObj.searchParams.get('tab') || 'overview');
     const allProjects = await db.prepare('SELECT * FROM projects ORDER BY updated_at DESC').all();
     const projects = allProjects.filter((p) => {
       if (stateFilter && p.activation_state !== stateFilter && p.editorial_state !== stateFilter) return false;
       if (q && !`${p.title} ${p.slug} ${p.property_type} ${p.city_region}`.toLowerCase().includes(q)) return false;
       return true;
     });
-    const selId = urlObj.searchParams.get('id') || projects[0]?.project_id;
-    const selectedProject = allProjects.find((p) => p.project_id === selId) || null;
+
+    const projectCounts = {};
+    for (const p of allProjects) {
+      const galC = (await db.prepare('SELECT COUNT(*) as c FROM project_gallery_items WHERE project_id = ?').get(p.project_id)).c;
+      const pairC = (await db.prepare('SELECT COUNT(*) as c FROM project_before_after_pairs WHERE project_id = ?').get(p.project_id)).c;
+      projectCounts[p.project_id] = {
+        photos: galC + (p.cover_asset_id ? 1 : 0),
+        pairs: pairC,
+      };
+    }
+
+    const selId = urlObj.searchParams.get('id') || '';
+    const selectedProject = selId ? allProjects.find((p) => p.project_id === selId) || null : null;
     const pairs = selectedProject
       ? await db.prepare('SELECT * FROM project_before_after_pairs WHERE project_id = ? ORDER BY sort_order ASC').all(selectedProject.project_id)
       : [];
@@ -841,6 +970,77 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
           .all(selectedProject.project_id)
       : [];
     const assets = await db.prepare('SELECT * FROM media_assets ORDER BY created_at DESC').all();
+    const assetById = Object.fromEntries(assets.map((a) => [a.asset_id, a]));
+
+    const publishChecks = [];
+    if (selectedProject) {
+      const hasBasicDetails = Boolean(
+        selectedProject.title &&
+        selectedProject.property_type &&
+        selectedProject.city_region &&
+        selectedProject.challenge &&
+        selectedProject.agreed_scope &&
+        selectedProject.completed_work
+      );
+      publishChecks.push({
+        key: 'details',
+        label: 'Required project details & challenge/scope completed',
+        passed: hasBasicDetails,
+        fixTab: 'details',
+        blocker: 'Complete all required fields in Step 1 (Overview) and Step 2 (Work Details).',
+      });
+      publishChecks.push({
+        key: 'photos_exist',
+        label: 'At least one cover photo, gallery image, or Before/After pair attached',
+        passed: Boolean(selectedProject.cover_asset_id || galleryItems.length > 0 || pairs.length > 0),
+        fixTab: 'photos',
+        blocker: 'Attach a cover photo, gallery item, or Before/After pair in Step 3 (Photos).',
+      });
+      publishChecks.push({
+        key: 'evidence',
+        label: 'Completion evidence documented',
+        passed: Boolean(selectedProject.completion_documented),
+        fixTab: 'permissions',
+        blocker: 'Check "Actual completion evidence documented" in Permissions & Evidence.',
+      });
+      publishChecks.push({
+        key: 'permission',
+        label: 'Client naming & photo permission verified',
+        passed: Boolean(selectedProject.client_permission_verified),
+        fixTab: 'permissions',
+        blocker: 'Check "Client naming/anonymity & photo permission verified" in Permissions & Evidence.',
+      });
+      publishChecks.push({
+        key: 'not_test',
+        label: 'Not marked as a private staging/test record',
+        passed: !selectedProject.is_private_test,
+        fixTab: 'permissions',
+        blocker: 'Uncheck "Private Staging/Training Test Record" before publishing live.',
+      });
+      const usedAssetIds = Array.from(
+        new Set(
+          [
+            selectedProject.cover_asset_id,
+            ...pairs.map((pr) => pr.before_asset_id),
+            ...pairs.map((pr) => pr.after_asset_id),
+            ...galleryItems.map((g) => g.asset_id),
+          ].filter(Boolean)
+        )
+      );
+      const unapprovedAssets = usedAssetIds
+        .map((id) => assetById[id])
+        .filter((a) => !a || a.rights_status !== 'approved');
+      publishChecks.push({
+        key: 'media_rights',
+        label: 'All cover, gallery, and Before/After photos have Approved rights',
+        passed: unapprovedAssets.length === 0,
+        fixTab: 'photos',
+        blocker:
+          unapprovedAssets.length > 0
+            ? `${unapprovedAssets.length} attached photo(s) still need Approved publication rights in the Media Library.`
+            : '',
+      });
+    }
 
     const assetUsageMap = {};
     for (const a of assets) {
@@ -859,16 +1059,20 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
       res,
       200,
       renderShell({
-        title: 'Projects & Before/After Media',
-        subtitle: 'Manage completed-work case studies, upload metadata-stripped photos, and pair before/after views.',
+        title: 'Projects & Media',
+        subtitle: 'Create commercial case studies, upload metadata-stripped photos, pair Before/After views, and publish approved work.',
         currentSection: 'projects',
         bodyHtml: AdminViews.renderAdminProjectsView({
+          view,
+          tab,
           projects,
+          projectCounts,
           selectedProject,
           pairs,
           galleryItems,
           assets,
           assetUsageMap,
+          publishChecks,
           filters: { q, state: stateFilter },
           user: session,
           csrfToken: session.csrf_token,
@@ -1177,7 +1381,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
     const actionMode = String(urlObj.searchParams.get('action') || '').trim();
 
     const allUsers = await db
-      .prepare('SELECT user_id, email, full_name, role, extra_roles_json, mfa_enabled, mfa_enrolled, mfa_enrolled_at, last_login_at, active, created_at, updated_at FROM users ORDER BY active DESC, role ASC, full_name ASC')
+      .prepare('SELECT user_id, email, full_name, role, extra_roles_json, mfa_enabled, mfa_enrolled, mfa_enrolled_at, must_set_password, last_login_at, active, created_at, updated_at FROM users ORDER BY active DESC, role ASC, full_name ASC')
       .all();
     const sessionRows = await db
       .prepare('SELECT user_id, COUNT(*) as session_count FROM sessions WHERE expires_at > ? GROUP BY user_id')
@@ -1227,6 +1431,7 @@ export async function handleAdminPages(req, res, db, urlObj, nonce) {
           activeSessionsMap,
           lastLoginMap,
           rolePermissionMap: ROLE_PERMISSION_MAP,
+          m365Status: getMailerStatus(),
           user: session,
           csrfToken: session.csrf_token,
         }),

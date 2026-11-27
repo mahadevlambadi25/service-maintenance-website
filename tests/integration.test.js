@@ -2753,4 +2753,241 @@ test('Full PRD P0 Acceptance Register Integration Suite', async (t) => {
       else process.env.MS_GRAPH_CLIENT_SECRET = prevSecret;
     }
   });
+
+  await t.test('PHASE-6-ONBOARDING: Manual + M365 Email Onboarding, Self-Set Password, Resend & Security', async () => {
+    const { sendEmailViaMicrosoftGraph, clearMailerTokenCache } = await import('../src/services/mailer.js');
+    const admin = await loginAs(baseUrl, 'admin@smiaz.local');
+    const editor = await loginAs(baseUrl, 'editor@smiaz.local');
+
+    // 1. Non-admin denied user creation
+    const denyCreate = await fetch(`${baseUrl}/admin/api/users`, {
+      method: 'POST',
+      headers: { Cookie: editor.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': editor.csrf },
+      body: JSON.stringify({
+        csrf_token: editor.csrf,
+        email: 'unauth.invite@smiaz.local',
+        full_name: 'Unauth Invite',
+        role: 'Content Editor',
+        onboarding_mode: 'manual',
+      }),
+    });
+    assert.equal(denyCreate.status, 403);
+
+    // 2. When M365 is unconfigured, UI shows Email option disabled/unavailable and API rejects email mode (422)
+    const usersCreateHtml = await (
+      await fetch(`${baseUrl}/admin/users?tab=directory&action=create`, { headers: { Cookie: admin.cookie } })
+    ).text();
+    assert.ok(usersCreateHtml.includes('Manual Invitation (Copy Setup Link)'));
+    assert.ok(usersCreateHtml.includes('Microsoft 365 email is not configured'));
+
+    const denyEmailUnconf = await fetch(`${baseUrl}/admin/api/users`, {
+      method: 'POST',
+      headers: { Cookie: admin.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': admin.csrf },
+      body: JSON.stringify({
+        csrf_token: admin.csrf,
+        email: 'email.unconf@smiaz.local',
+        full_name: 'Email Unconf',
+        role: 'Content Editor',
+        onboarding_mode: 'email',
+      }),
+    });
+    assert.equal(denyEmailUnconf.status, 422);
+
+    // 3. Manual Invitation creates user with must_set_password=1 & returns copyable single-use link
+    const manualRes = await fetch(`${baseUrl}/admin/api/users`, {
+      method: 'POST',
+      headers: { Cookie: admin.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': admin.csrf },
+      body: JSON.stringify({
+        csrf_token: admin.csrf,
+        email: 'manual.onboard@smiaz.local',
+        full_name: 'Manual Onboard',
+        role: 'Content Editor',
+        onboarding_mode: 'manual',
+      }),
+    });
+    assert.equal(manualRes.status, 201);
+    const manualData = await manualRes.json();
+    assert.ok(manualData.setup_url.startsWith('/admin/mfa-setup?token='));
+    const firstToken = new URL(manualData.setup_url, baseUrl).searchParams.get('token');
+
+    // User cannot sign in before completing onboarding
+    const preOnboardLogin = await fetch(`${baseUrl}/admin/login`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ email: 'manual.onboard@smiaz.local', password: 'anything-123' }).toString(),
+    });
+    assert.equal(preOnboardLogin.status, 401);
+
+    // 4. Resend invalidates previous unused token
+    const resendRes = await fetch(`${baseUrl}/admin/api/users/${manualData.user_id}/mfa-recovery-token`, {
+      method: 'POST',
+      headers: { Cookie: admin.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': admin.csrf },
+      body: JSON.stringify({ csrf_token: admin.csrf, delivery_method: 'manual' }),
+    });
+    assert.equal(resendRes.status, 200);
+    const resendData = await resendRes.json();
+    const secondToken = new URL(resendData.setup_url, baseUrl).searchParams.get('token');
+    assert.notEqual(secondToken, firstToken);
+
+    const oldTokenGet = await fetch(`${baseUrl}/admin/mfa-setup?token=${encodeURIComponent(firstToken)}`);
+    assert.equal(oldTokenGet.status, 403);
+
+    // 5. Invited user completes self-set password + QR/TOTP + 8 recovery codes using secondToken
+    const getSetup = await fetch(`${baseUrl}/admin/mfa-setup?token=${encodeURIComponent(secondToken)}`);
+    assert.equal(getSetup.status, 200);
+    const setupHtml = await getSetup.text();
+    assert.ok(setupHtml.includes('name="new_password"'));
+    assert.ok(setupHtml.includes('name="confirm_password"'));
+    const csrfCookie = (getSetup.headers.getSetCookie?.() || [getSetup.headers.get('set-cookie')])
+      .find((c) => c?.startsWith('sm_mfa_csrf='))
+      .split(';')[0];
+    const step1Csrf = setupHtml.match(/name="csrf_token" value="([^"]+)"/)[1];
+
+    // Mismatched password rejected (422)
+    const mismatchRes = await fetch(`${baseUrl}/admin/mfa-setup`, {
+      method: 'POST',
+      headers: { Cookie: csrfCookie, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: step1Csrf,
+        step: 'begin',
+        email: 'manual.onboard@smiaz.local',
+        new_password: 'NewStaffPassword#2026',
+        confirm_password: 'DifferentPassword#2026',
+        setup_token: secondToken,
+        must_set_password: '1',
+      }).toString(),
+    });
+    assert.equal(mismatchRes.status, 422);
+    const mismatchHtml = await mismatchRes.text();
+    const step1Csrf2 = mismatchHtml.match(/name="csrf_token" value="([^"]+)"/)[1];
+    const csrfCookie2 = (mismatchRes.headers.getSetCookie?.() || [mismatchRes.headers.get('set-cookie')])
+      .find((c) => c?.startsWith('sm_mfa_csrf='))
+      .split(';')[0];
+
+    // Valid password starts QR stage
+    const beginOk = await fetch(`${baseUrl}/admin/mfa-setup`, {
+      method: 'POST',
+      headers: { Cookie: csrfCookie2, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: step1Csrf2,
+        step: 'begin',
+        email: 'manual.onboard@smiaz.local',
+        new_password: 'NewStaffPassword#2026',
+        confirm_password: 'NewStaffPassword#2026',
+        setup_token: secondToken,
+        must_set_password: '1',
+      }).toString(),
+    });
+    assert.equal(beginOk.status, 200);
+    const step2Html = await beginOk.text();
+    const manualSecret = step2Html.match(/<code[^>]*>([A-Z2-7 ]{16,})<\/code>/)[1].replace(/\s+/g, '');
+    const step2Csrf = step2Html.match(/name="csrf_token" value="([^"]+)"/)[1];
+    const step2Cookies = (beginOk.headers.getSetCookie?.() || [beginOk.headers.get('set-cookie')])
+      .map((c) => c.split(';')[0])
+      .join('; ');
+
+    const confirmOk = await fetch(`${baseUrl}/admin/mfa-setup`, {
+      method: 'POST',
+      headers: { Cookie: step2Cookies, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        csrf_token: step2Csrf,
+        step: 'confirm',
+        totp_code: generateTotpCode(manualSecret),
+      }).toString(),
+    });
+    assert.equal(confirmOk.status, 200);
+    const doneHtml = await confirmOk.text();
+    assert.ok(doneHtml.includes('Recovery Codes'));
+
+    // Reusing token after completion is denied (403)
+    const reuseRes = await fetch(`${baseUrl}/admin/mfa-setup?token=${encodeURIComponent(secondToken)}`);
+    assert.equal(reuseRes.status, 403);
+
+    // Invited user can now sign in with their own password + TOTP
+    const loginOk = await fetch(`${baseUrl}/admin/login`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        email: 'manual.onboard@smiaz.local',
+        password: 'NewStaffPassword#2026',
+        totp_code: generateTotpCode(manualSecret),
+      }).toString(),
+    });
+    assert.equal(loginOk.status, 302);
+
+    // 6. Microsoft 365 Email Invitation (success + failure fallback) & zero secrets in audit_log
+    const prevTenant = process.env.MS_GRAPH_TENANT_ID;
+    const prevClient = process.env.MS_GRAPH_CLIENT_ID;
+    const prevSecret = process.env.MS_GRAPH_CLIENT_SECRET;
+    try {
+      process.env.MS_GRAPH_TENANT_ID = 'mock-tenant';
+      process.env.MS_GRAPH_CLIENT_ID = 'mock-client';
+      process.env.MS_GRAPH_CLIENT_SECRET = 'mock-secret';
+      clearMailerTokenCache();
+
+      let mailedLink = '';
+      setMailerFetch(async (url, opts) => {
+        if (String(url).includes('oauth2/v2.0/token')) {
+          return new Response(JSON.stringify({ access_token: 'tok-onb', expires_in: 3600 }), { status: 200 });
+        }
+        const payload = JSON.parse(opts.body);
+        const match = payload.message.body.content.match(/\/admin\/mfa-setup\?token=[A-Za-z0-9_-]+/);
+        mailedLink = match ? match[0] : '';
+        return new Response('', { status: 202, headers: { 'request-id': 'req-onb-1' } });
+      });
+
+      const emailCreate = await fetch(`${baseUrl}/admin/api/users`, {
+        method: 'POST',
+        headers: { Cookie: admin.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': admin.csrf },
+        body: JSON.stringify({
+          csrf_token: admin.csrf,
+          email: 'email.onboard@smiaz.local',
+          full_name: 'Email Onboard',
+          role: 'Analyst',
+          onboarding_mode: 'email',
+        }),
+      });
+      assert.equal(emailCreate.status, 201);
+      const emailData = await emailCreate.json();
+      assert.equal(emailData.onboarding_mode, 'email');
+      assert.equal('setup_url' in emailData, false);
+      assert.ok(mailedLink.startsWith('/admin/mfa-setup?token='));
+
+      // Verify M365 email delivery failure returns 502 with manual fallback link
+      setMailerFetch(async (url) => {
+        if (String(url).includes('oauth2/v2.0/token')) {
+          return new Response(JSON.stringify({ access_token: 'tok-onb', expires_in: 3600 }), { status: 200 });
+        }
+        return new Response('Graph unavailable', { status: 500 });
+      });
+      const failEmailRes = await fetch(`${baseUrl}/admin/api/users/${emailData.user_id}/mfa-recovery-token`, {
+        method: 'POST',
+        headers: { Cookie: admin.cookie, 'Content-Type': 'application/json', 'X-CSRF-Token': admin.csrf },
+        body: JSON.stringify({ csrf_token: admin.csrf, delivery_method: 'email' }),
+      });
+      assert.equal(failEmailRes.status, 502);
+      const failData = await failEmailRes.json();
+      assert.equal(failData.email_failed, true);
+      assert.ok(failData.setup_url.startsWith('/admin/mfa-setup?token='));
+
+      // Verify audit_log never contains raw onboarding tokens or passwords
+      const mailedTok = new URL(mailedLink, baseUrl).searchParams.get('token');
+      const fallbackTok = new URL(failData.setup_url, baseUrl).searchParams.get('token');
+      const leakCheck = await db
+        .prepare(`SELECT COUNT(*) as cnt FROM audit_log WHERE details_json LIKE ? OR details_json LIKE ? OR details_json LIKE '%NewStaffPassword%'`)
+        .get(`%${mailedTok}%`, `%${fallbackTok}%`);
+      assert.equal(leakCheck.cnt, 0);
+    } finally {
+      setMailerFetch(null);
+      clearMailerTokenCache();
+      if (prevTenant === undefined) delete process.env.MS_GRAPH_TENANT_ID;
+      else process.env.MS_GRAPH_TENANT_ID = prevTenant;
+      if (prevClient === undefined) delete process.env.MS_GRAPH_CLIENT_ID;
+      else process.env.MS_GRAPH_CLIENT_ID = prevClient;
+      if (prevSecret === undefined) delete process.env.MS_GRAPH_CLIENT_SECRET;
+      else process.env.MS_GRAPH_CLIENT_SECRET = prevSecret;
+    }
+  });
 });

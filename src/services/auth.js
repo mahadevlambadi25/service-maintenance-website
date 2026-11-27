@@ -6,6 +6,7 @@ import {
   generateRecoveryCodes,
   generateTotpSecret,
   generateUuid,
+  hashPassword,
   hashRecoveryCodeList,
   randomToken,
   sha256Hex,
@@ -322,7 +323,16 @@ export async function authenticateSession(db, req) {
 export async function createPendingOrVerifiedSession(db, { email, password, totpCode, ip }) {
   await syncAuthPolicyState(db);
   const user = await db.prepare('SELECT * FROM users WHERE email = ?').get(String(email || '').trim().toLowerCase());
-  if (!user || !user.active || !verifyPassword(password, user.password_hash)) {
+  if (!user || !user.active) {
+    return { ok: false, error: 'Invalid email or password.' };
+  }
+  if (user.must_set_password) {
+    return {
+      ok: false,
+      error: 'Account onboarding is incomplete. Open your single-use setup link at /admin/mfa-setup to create your password and enroll Google Authenticator.',
+    };
+  }
+  if (!verifyPassword(password, user.password_hash)) {
     return { ok: false, error: 'Invalid email or password.' };
   }
 
@@ -399,7 +409,7 @@ export async function issueMfaSetupToken(db, { userId, purpose = 'first_time_enr
 
   const now = new Date();
   const nowIso = now.toISOString();
-  const expiresAt = new Date(now.getTime() + Math.max(5, Math.min(60, Number(ttlMinutes) || 15)) * 60_000).toISOString();
+  const expiresAt = new Date(now.getTime() + Math.max(5, Math.min(1440, Number(ttlMinutes) || 15)) * 60_000).toISOString();
   const rawToken = randomToken(32);
   const tokenHash = sha256Hex(rawToken);
   const tokenId = generateUuid();
@@ -436,7 +446,7 @@ export async function validateMfaSetupToken(db, rawToken) {
   const tokenHash = sha256Hex(clean);
   const row = await db
     .prepare(
-      `SELECT t.*, u.email, u.full_name, u.role, u.mfa_enrolled, u.active
+      `SELECT t.*, u.email, u.full_name, u.role, u.mfa_enrolled, u.must_set_password, u.active
        FROM mfa_recovery_tokens t
        JOIN users u ON u.user_id = t.user_id
        WHERE t.token_hash = ?`
@@ -456,7 +466,10 @@ export async function validateMfaSetupToken(db, rawToken) {
   return { ok: true, tokenRow: row };
 }
 
-export async function beginMfaEnrollment(db, { email, password, setupToken, recoveryCode, currentTotp, session, ip }) {
+export async function beginMfaEnrollment(
+  db,
+  { email, password, newPassword = '', confirmPassword = '', setupToken, recoveryCode, currentTotp, session, ip }
+) {
   const rl = checkRateLimit(`mfa_begin:${ip || 'unknown'}`, 15, 60_000);
   if (!rl.allowed) {
     return { ok: false, status: 429, error: `Too many MFA setup attempts. Wait ${rl.retryAfterSec}s.` };
@@ -464,7 +477,31 @@ export async function beginMfaEnrollment(db, { email, password, setupToken, reco
 
   const normalizedEmail = String(email || '').trim().toLowerCase();
   const user = await db.prepare('SELECT * FROM users WHERE email = ?').get(normalizedEmail);
-  if (!user || !user.active || !verifyPassword(String(password || ''), user.password_hash)) {
+  if (!user || !user.active) {
+    await recordAudit(db, null, 'auth', 'mfa_setup_failed_identity', 'user', normalizedEmail || 'unknown', { ip_hash: sha256Hex(ip || 'unknown') });
+    return { ok: false, status: 401, error: 'Invalid staff email or credentials.' };
+  }
+
+  let pendingPasswordHash = null;
+  if (user.must_set_password) {
+    if (!setupToken || !String(setupToken).trim()) {
+      await recordAudit(db, user, 'auth', 'mfa_setup_denied_unauth', 'user', user.user_id, { ip_hash: sha256Hex(ip || 'unknown') });
+      return {
+        ok: false,
+        status: 403,
+        error: 'Initial onboarding requires a valid single-use setup link issued by a Platform Administrator.',
+      };
+    }
+    const np = String(newPassword || '');
+    const cp = String(confirmPassword || '');
+    if (np.length < 10) {
+      return { ok: false, status: 422, mustSetPassword: true, error: 'Create a password with at least 10 characters.' };
+    }
+    if (np !== cp) {
+      return { ok: false, status: 422, mustSetPassword: true, error: 'Password and confirmation do not match.' };
+    }
+    pendingPasswordHash = hashPassword(np);
+  } else if (!verifyPassword(String(password || ''), user.password_hash)) {
     await recordAudit(db, null, 'auth', 'mfa_setup_failed_identity', 'user', normalizedEmail || 'unknown', { ip_hash: sha256Hex(ip || 'unknown') });
     return { ok: false, status: 401, error: 'Invalid staff email or password.' };
   }
@@ -549,6 +586,7 @@ export async function beginMfaEnrollment(db, { email, password, setupToken, reco
       mode: authMode,
       tokenId: tokenRow?.token_id || null,
       recoveryCodeId,
+      pendingPasswordHash,
       exp: Date.now() + 15 * 60_000,
     },
   };
@@ -612,14 +650,34 @@ export async function completeMfaEnrollment(db, { pendingContext, totpCode, ip }
     }
   }
 
-  await db
-    .prepare(
-      `UPDATE users
-       SET totp_secret = ?, mfa_pending_secret = NULL, mfa_enabled = 1, mfa_enrolled = 1,
-           mfa_enrolled_at = COALESCE(mfa_enrolled_at, ?), last_login_at = ?, recovery_codes_json = ?, updated_at = ?
-       WHERE user_id = ?`
-    )
-    .run(encryptedConfirmed, nowIso, nowIso, JSON.stringify(hashedRecoveryCodes), nowIso, user.user_id);
+  if (pendingContext.pendingPasswordHash && user.must_set_password) {
+    await db
+      .prepare(
+        `UPDATE users
+         SET password_hash = ?, must_set_password = 0, totp_secret = ?, mfa_pending_secret = NULL,
+             mfa_enabled = 1, mfa_enrolled = 1, mfa_enrolled_at = COALESCE(mfa_enrolled_at, ?),
+             last_login_at = ?, recovery_codes_json = ?, updated_at = ?
+         WHERE user_id = ?`
+      )
+      .run(
+        pendingContext.pendingPasswordHash,
+        encryptedConfirmed,
+        nowIso,
+        nowIso,
+        JSON.stringify(hashedRecoveryCodes),
+        nowIso,
+        user.user_id
+      );
+  } else {
+    await db
+      .prepare(
+        `UPDATE users
+         SET totp_secret = ?, mfa_pending_secret = NULL, mfa_enabled = 1, mfa_enrolled = 1,
+             mfa_enrolled_at = COALESCE(mfa_enrolled_at, ?), last_login_at = ?, recovery_codes_json = ?, updated_at = ?
+         WHERE user_id = ?`
+      )
+      .run(encryptedConfirmed, nowIso, nowIso, JSON.stringify(hashedRecoveryCodes), nowIso, user.user_id);
+  }
 
   // Revoke any prior sessions across all devices, then issue a fresh verified session
   await revokeUserSessions(db, user.user_id);
@@ -638,6 +696,7 @@ export async function completeMfaEnrollment(db, { pendingContext, totpCode, ip }
   await recordAudit(db, user, 'auth', 'mfa_enrollment_completed', 'user', user.user_id, {
     mode: pendingContext.mode,
     token_id: pendingContext.tokenId || null,
+    password_initialized: Boolean(pendingContext.pendingPasswordHash),
     sessions_revoked: true,
     recovery_codes_rotated: true,
   });

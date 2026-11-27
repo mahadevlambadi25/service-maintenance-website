@@ -159,7 +159,7 @@ export async function detectPgNeedsMigration(runtimePool) {
   try {
     const check = await runtimePool.query('SELECT id FROM business_settings WHERE id = 1 LIMIT 1');
     await runtimePool.query(
-      'SELECT mfa_enrolled, mfa_pending_secret, recovery_codes_json, last_login_at FROM users LIMIT 1'
+      'SELECT mfa_enrolled, mfa_pending_secret, recovery_codes_json, last_login_at, must_set_password FROM users LIMIT 1'
     );
     await runtimePool.query('SELECT token_id FROM mfa_recovery_tokens LIMIT 1');
     await runtimePool.query('SELECT mfa_required FROM auth_policy_state LIMIT 1');
@@ -839,6 +839,7 @@ export async function migrateSchema(db) {
     ['users', 'mfa_pending_secret', 'TEXT'],
     ['users', 'recovery_codes_json', "TEXT NOT NULL DEFAULT '[]'"],
     ['users', 'last_login_at', 'TEXT'],
+    ['users', 'must_set_password', 'INTEGER NOT NULL DEFAULT 0'],
   ];
 
   for (const [table, column, definition] of additiveColumns) {

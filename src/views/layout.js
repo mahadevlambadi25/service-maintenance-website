@@ -1,5 +1,22 @@
-import { ENV } from '../config.js';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { ENV, ROOT_DIR } from '../config.js';
 import { escapeHtml } from '../lib/sanitize.js';
+
+function computeAssetVersion() {
+  try {
+    const hash = crypto.createHash('sha1');
+    for (const rel of ['public/css/tokens.css', 'public/css/main.css', 'public/js/app.js']) {
+      hash.update(fs.readFileSync(path.join(ROOT_DIR, rel)));
+    }
+    return hash.digest('hex').slice(0, 10);
+  } catch {
+    return '1';
+  }
+}
+
+const ASSET_VERSION = computeAssetVersion();
 
 export function buildJsonLdOrganization(settings) {
   return {
@@ -59,9 +76,10 @@ export function renderPublicLayout({
 
   const navItems = [
     { href: '/services/', label: 'Services' },
-    { href: '/properties/', label: 'Properties we serve' },
+    { href: '/properties/', label: 'Properties We Serve' },
     { href: '/projects/', label: 'Projects' },
     { href: '/about/', label: 'About' },
+    { href: '/credentials/', label: 'Credentials' },
   ];
   if (hasPublishedInsights) {
     navItems.push({ href: '/insights/', label: 'Insights' });
@@ -81,8 +99,8 @@ export function renderPublicLayout({
   <meta property="og:type" content="website">
   <meta property="og:url" content="${escapeHtml(canonicalUrl)}">
   <link rel="icon" type="image/svg+xml" href="/assets/brand-mark.svg">
-  <link rel="stylesheet" href="/css/tokens.css">
-  <link rel="stylesheet" href="/css/main.css">
+  <link rel="stylesheet" href="/css/tokens.css?v=${ASSET_VERSION}">
+  <link rel="stylesheet" href="/css/main.css?v=${ASSET_VERSION}">
   ${jsonLdBlocks
     .map(
       (obj) =>
@@ -128,12 +146,12 @@ export function renderPublicLayout({
 
   <div class="utility-bar">
     <div class="container utility-bar__inner">
-      <span>Greater Phoenix Commercial Property Services</span>
+      <span class="utility-bar__loc">Greater Phoenix, AZ <span class="utility-bar__hours">&middot; ${escapeHtml(settings.hours_display)}</span></span>
       <div class="utility-bar__links">
-        <a href="tel:${escapeHtml(settings.phone_e164)}" data-track="phone_click">${escapeHtml(settings.phone_display)}</a>
-        <a href="/request-service/">Existing customer service</a>
-        <a href="/careers/">Careers</a>
-        <a href="/contact/">Contact</a>
+        <a href="/request-service/" class="utility-bar__extra">Existing Customer Service</a>
+        <a href="/careers/" class="utility-bar__extra">Careers</a>
+        <a href="/contact/" class="utility-bar__extra">Contact</a>
+        <a href="tel:${escapeHtml(settings.phone_e164)}" data-track="phone_click" class="utility-bar__phone">${escapeHtml(settings.phone_display)}</a>
       </div>
     </div>
   </div>
@@ -162,6 +180,9 @@ export function renderPublicLayout({
                 }>${escapeHtml(item.label)}</a></li>`
             )
             .join('')}
+          <li class="mobile-only-nav"><a href="/request-service/" class="primary-nav__link">Existing Customer Service</a></li>
+          <li class="mobile-only-nav"><a href="/careers/" class="primary-nav__link">Careers</a></li>
+          <li class="mobile-only-nav"><a href="/contact/" class="primary-nav__link">Contact</a></li>
         </ul>
       </nav>
 
@@ -184,54 +205,65 @@ export function renderPublicLayout({
 
   <footer class="site-footer">
     <div class="container">
-      <div class="footer-grid">
+      <div class="footer-grid footer-grid--ref">
         <div>
-          <h2 class="footer-heading">${escapeHtml(settings.trading_name)}</h2>
+          <div class="footer-brand-row">
+            <img src="/assets/brand-mark.svg" alt="" width="34" height="34" aria-hidden="true">
+            <div>
+              <h2 class="footer-heading" style="margin-bottom:0.1rem;">${escapeHtml(settings.trading_name)}</h2>
+              <span class="footer-sub">Commercial Property Care</span>
+            </div>
+          </div>
           <p>${escapeHtml(settings.trading_name)} is the trading name of <strong>${escapeHtml(settings.legal_entity)}</strong>. Commercial recurring care, repairs, and tenant improvements across Greater Phoenix.</p>
-          <p>
-            <strong>Telephone:</strong> <a href="tel:${escapeHtml(settings.phone_e164)}" data-track="phone_click">${escapeHtml(settings.phone_display)}</a><br>
-            <strong>Monitored Contact:</strong> <a href="mailto:${escapeHtml(settings.monitored_inbox)}" data-track="email_click">${escapeHtml(settings.monitored_inbox)}</a><br>
-            <strong>Hours:</strong> ${escapeHtml(settings.hours_display)}<br>
-            <strong>Office Reference:</strong> ${escapeHtml(settings.address_display)}
-          </p>
         </div>
 
         <div>
-          <h2 class="footer-heading">Services &amp; Properties</h2>
+          <h2 class="footer-heading">Services</h2>
           <ul class="footer-links">
-            <li><a href="/services/">All Services</a></li>
             <li><a href="/services/day-porter/">Day Porter Services</a></li>
             <li><a href="/services/recurring-property-care/">Recurring Property Care</a></li>
             <li><a href="/services/commercial-maintenance/">Commercial Maintenance</a></li>
             <li><a href="/services/warehouse-repairs/">Warehouse Repairs</a></li>
             <li><a href="/services/tenant-improvements/">Tenant Improvements</a></li>
-            <li><a href="/services/tenant-move-outs/">Tenant Move-Outs</a></li>
-            <li><a href="/properties/">Properties We Serve</a></li>
-            <li><a href="/property-managers/">For Property Managers</a></li>
+            <li><a href="/services/">All Services</a></li>
           </ul>
         </div>
 
         <div>
-          <h2 class="footer-heading">Company &amp; Proof</h2>
+          <h2 class="footer-heading">Properties We Serve</h2>
           <ul class="footer-links">
-            <li><a href="/projects/">Completed Projects</a></li>
-            <li><a href="/about/">About Us (Roots to 1989)</a></li>
-            <li><a href="/credentials/">Credentials &amp; ROC Licenses</a></li>
+            <li><a href="/properties/industrial-warehouses/">Industrial &amp; Warehouses</a></li>
+            <li><a href="/properties/retail-centers/">Retail Centers</a></li>
+            <li><a href="/properties/commercial-offices/">Commercial Offices</a></li>
+            <li><a href="/property-managers/">Property Managers</a></li>
             <li><a href="/service-area/">Greater Phoenix Service Area</a></li>
-            <li><a href="/careers/">Careers &amp; Current Openings</a></li>
-            ${hasPublishedInsights ? '<li><a href="/insights/">Insights</a></li>' : ''}
           </ul>
         </div>
 
         <div>
-          <h2 class="footer-heading">Actions &amp; Policies</h2>
+          <h2 class="footer-heading">Company &amp; Resources</h2>
           <ul class="footer-links">
-            <li><a href="/request-proposal/">Request a Proposal</a></li>
-            <li><a href="/request-service/">Existing Customer Service Request</a></li>
-            <li><a href="/contact/">Contact &amp; Vendor Inquiries</a></li>
+            <li><a href="/about/">About Us (Roots to 1989)</a></li>
+            <li><a href="/projects/">Completed Projects</a></li>
+            <li><a href="/credentials/">Credentials &amp; ROC Licenses</a></li>
+            <li><a href="/credentials/capabilities.pdf" download="Service-Maintenance-Capabilities.pdf" data-track="download_capabilities">Capabilities Statement (PDF)</a></li>
+            <li><a href="/careers/">Careers &amp; Openings</a></li>
+            ${hasPublishedInsights ? '<li><a href="/insights/">Insights</a></li>' : ''}
             <li><a href="/privacy/">Privacy Policy</a></li>
-            <li><a href="/accessibility/">Accessibility Statement</a></li>
+            <li><a href="/accessibility/">Accessibility</a></li>
             <li><button type="button" class="btn btn--ghost-light" id="open-consent-dialog" style="margin-top:0.5rem;padding:0.4rem 0.75rem;font-size:0.85rem;">Cookie &amp; Privacy Choices</button></li>
+          </ul>
+        </div>
+
+        <div>
+          <h2 class="footer-heading">Contact</h2>
+          <ul class="footer-links">
+            <li><a href="tel:${escapeHtml(settings.phone_e164)}" data-track="phone_click">${escapeHtml(settings.phone_display)}</a></li>
+            <li><a href="mailto:${escapeHtml(settings.monitored_inbox)}" data-track="email_click">${escapeHtml(settings.monitored_inbox)}</a></li>
+            <li>${escapeHtml(settings.address_display)}</li>
+            <li>${escapeHtml(settings.hours_display)}</li>
+            <li><a href="/request-proposal/">Request a Proposal</a></li>
+            <li><a href="/request-service/">Existing Customer Service</a></li>
           </ul>
         </div>
       </div>
@@ -284,7 +316,7 @@ export function renderPublicLayout({
 
   ${previewInfo?.viewport === 'mobile' ? '</div>' : ''}
   <div id="live-announcer" aria-live="polite" class="visually-hidden"></div>
-  <script nonce="${escapeHtml(nonce)}" src="/js/app.js" defer></script>
+  <script nonce="${escapeHtml(nonce)}" src="/js/app.js?v=${ASSET_VERSION}" defer></script>
 </body>
 </html>`;
 }

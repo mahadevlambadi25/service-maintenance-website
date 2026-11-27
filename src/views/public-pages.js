@@ -1,69 +1,139 @@
 import { SERVICE_FAMILIES, PRIVACY_NOTICE_VERSION } from '../config.js';
 import { escapeHtml, sanitizeRichHtml } from '../lib/sanitize.js';
-import { renderBeforeAfterPair, renderBreadcrumbs, renderResponsivePicture, renderSeasonalFeatureSlot } from './components.js';
+import { renderBeforeAfterPair, renderBreadcrumbs, renderFaqAccordion, renderResponsivePicture, renderSeasonalFeatureSlot } from './components.js';
 
 export function renderHomePage({ rev, settings, approvedProjects, seasonalFeature, buildingEngineerLive }) {
-  // 10-part required sequence (PRD Section 08.01):
-  // 1. Header & Hero (solid surface adjacent to architectural diagram, LCP high priority)
-  // 2. Service Pillars (Recurring care, Maintenance/repairs, TI)
-  // [Optional Seasonal Focus slot]
-  // 3. Why clients choose the relationship (4 substantiated differentiators)
-  // 4. Selected work (ONLY if approved public projects exist; otherwise truthful factual operating proof)
-  // 5. How work is managed (4 steps)
-  // 6. Properties served (Warehouse, Retail, Office, Property Managers)
-  // 7. Operating practices (Scope clarity, coordination, communication, closeout)
-  // 8. Company story (1989 roots + 2020 transition)
-  // 9. Proof / Credentials summary (factual proof without fabricated testimonials)
-  // 10. Final inquiry CTA + telephone alternative
+  const homeFaqs = [
+    {
+      q: 'What types of commercial properties do you service?',
+      a: 'We support industrial and warehouse facilities, retail centers, commercial offices, and multi-tenant commercial portfolios across Greater Phoenix.',
+    },
+    {
+      q: 'How do I request a proposal?',
+      a: 'Use our Request a Proposal form to share your property city or ZIP, service needed, and preferred contact method. Photos or an RFP PDF are optional, and no minimum project size is required.',
+    },
+    {
+      q: 'Do you handle tenant improvements?',
+      a: 'Yes. We manage commercial suite build-outs, alterations, white-shell lease-return turnovers, and final cleaning—coordinating licensed specialty trades where required.',
+    },
+    {
+      q: 'Do you provide automated estimates or guaranteed emergency dispatch times?',
+      a: 'No. Every scope is reviewed clearly in writing based on site access, operating hours, and trade requirements rather than automated pricing or unverified dispatch promises.',
+    },
+  ];
 
   return `
-  <!-- 1. Hero -->
-  <section class="hero" aria-labelledby="hero-title">
-    <div class="container hero__grid">
-      <div class="hero__content">
-        <span class="eyebrow">Commercial Property Services — Greater Phoenix</span>
+  <!-- 1. Hero (Photographic with Smooth Cream Gradient + Scope Review Starter) -->
+  <section class="hero hero--photo" aria-labelledby="hero-title">
+    <div class="container hero--photo__grid">
+      <div class="hero--photo__content">
+        <span class="eyebrow">Commercial Property Services &mdash; Greater Phoenix</span>
         <h1 id="hero-title">${escapeHtml(rev.hero_headline)}</h1>
-        <p style="font-size:1.15rem;color:var(--color-muted-stone);">${escapeHtml(rev.hero_summary)}</p>
+        <p class="hero__lead">${escapeHtml(rev.hero_summary)}</p>
         <div class="hero__actions">
-          <a href="${escapeHtml(rev.cta_route)}" class="btn btn--primary">${escapeHtml(rev.cta_label)}</a>
-          <a href="/services/" class="btn btn--secondary">Explore our services</a>
+          <a href="${escapeHtml(rev.cta_route)}" class="btn btn--primary">${escapeHtml(rev.cta_label)} &rarr;</a>
+          <a href="/services/" class="btn btn--secondary">Explore Our Services</a>
         </div>
-        <p class="muted" style="margin-top:1.15rem;font-size:0.9rem;margin-bottom:0;">
-          Direct office line: <a href="tel:${escapeHtml(settings.phone_e164)}" data-track="phone_click">${escapeHtml(settings.phone_display)}</a> (${escapeHtml(settings.hours_display)})
-        </p>
+        <div class="hero__trust-pills" aria-label="Verified credentials summary">
+          <span class="hero__trust-pill">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            In-House &amp; Coordinated Trades
+          </span>
+          <span class="hero__trust-pill">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>
+            Arizona ROC Licensed
+          </span>
+          <span class="hero__trust-pill">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            Based in Tempe, AZ (Roots to 1989)
+          </span>
+        </div>
       </div>
-      <div class="hero__media">
-        <img src="/assets/hero-architecture.svg"
-             alt="Architectural elevation schematic of commercial warehouse, retail, and office property scopes"
-             width="640" height="460" fetchpriority="high">
-        <p class="hero__caption">Architectural scope schematic across industrial, retail, and office commercial assets. Our roots date to 1989.</p>
-      </div>
+
+      <aside class="hero-scope-card" aria-label="Start a scope review">
+        <h2>Start a Scope Review</h2>
+        <p>Select your commercial service need to open the proposal form with your scope preselected.</p>
+        <form method="GET" action="/request-proposal/">
+          <div class="field" style="margin-bottom:0.85rem;">
+            <label for="hero-service-select" class="visually-hidden">Service category</label>
+            <select id="hero-service-select" name="service" required>
+              <option value="">Select a service...</option>
+              ${SERVICE_FAMILIES.filter((s) => !s.conditional)
+                .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.label)}</option>`)
+                .join('')}
+            </select>
+          </div>
+          <button type="submit" class="btn btn--primary" style="width:100%;">Request a Proposal &rarr;</button>
+        </form>
+      </aside>
     </div>
   </section>
 
-  <!-- 2. Three Service Pillars -->
+  <!-- 2. Quick Actions Strip -->
+  <div class="container quick-strip-wrap">
+    <nav class="quick-strip" aria-label="Quick customer actions">
+      <a href="/request-service/" class="quick-strip__item">
+        <span class="quick-strip__icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>
+        <span class="quick-strip__text"><strong>Existing Client Service</strong><span>Maintenance routing</span></span>
+      </a>
+      <a href="/request-proposal/" class="quick-strip__item">
+        <span class="quick-strip__icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span>
+        <span class="quick-strip__text"><strong>Request a Proposal</strong><span>New commercial scopes</span></span>
+      </a>
+      <a href="/service-area/" class="quick-strip__item">
+        <span class="quick-strip__icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></span>
+        <span class="quick-strip__text"><strong>Service Area</strong><span>Greater Phoenix metro</span></span>
+      </a>
+      <a href="/credentials/capabilities.pdf" class="quick-strip__item" download="Service-Maintenance-Capabilities.pdf" data-track="download_capabilities">
+        <span class="quick-strip__icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
+        <span class="quick-strip__text"><strong>Download Capabilities</strong><span>Ungated PDF</span></span>
+      </a>
+      <a href="tel:${escapeHtml(settings.phone_e164)}" class="quick-strip__item" data-track="phone_click">
+        <span class="quick-strip__icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg></span>
+        <span class="quick-strip__text"><strong>Talk to Our Team</strong><span>${escapeHtml(settings.phone_display)}</span></span>
+      </a>
+    </nav>
+  </div>
+
+  <!-- 3. Our Services (4-Column Architectural Card Grid) -->
   <section class="section" aria-labelledby="pillars-title">
     <div class="container">
-      <span class="eyebrow">Service Architecture</span>
-      <h2 id="pillars-title">Three core pillars—plus specialist paths</h2>
-      <div class="grid-3" style="margin-top:1.75rem;">
-        <article class="editorial-block">
-          <h3>Recurring property care</h3>
-          <p>For property managers seeking reliable daytime upkeep and predictable exterior schedules.</p>
-          <p class="muted" style="font-size:0.93rem;">Day porter services, pressure washing, parking lot sweeping, roof debris observations${buildingEngineerLive ? ', and building engineer support' : ''}.</p>
-          <p><a href="/services/day-porter/">Day porter services</a> &middot; <a href="/services/recurring-property-care/">All recurring care</a></p>
+      <div class="section-head-row">
+        <div>
+          <span class="eyebrow">Our Services</span>
+          <h2 id="pillars-title">Three core pillars &mdash; plus specialist paths</h2>
+          <p class="section-header__lead">Comprehensive commercial property care, from day-to-day operations to suite improvements.</p>
+        </div>
+        <a href="/services/" style="font-weight:600;white-space:nowrap;">View All Services &rarr;</a>
+      </div>
+
+      <div class="grid-4">
+        <article class="service-card">
+          <span class="service-card__icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></span>
+          <h3>Recurring Property Care</h3>
+          <p>Day porter services, pressure washing, parking lot sweeping, and roof debris observations${buildingEngineerLive ? ' plus building engineer support' : ''}.</p>
+          <a href="/services/day-porter/" class="service-card__link">Explore Services &rarr;</a>
         </article>
-        <article class="editorial-block">
-          <h3>Commercial maintenance &amp; repairs</h3>
-          <p>For facilities and operations teams needing clear coordination on routine repairs or multi-item lists.</p>
-          <p class="muted" style="font-size:0.93rem;">Interior drywall/paint/doors, warehouse scrim &amp; insulation, bollards, concrete, lighting, plumbing coordination, and site repairs.</p>
-          <p><a href="/services/commercial-maintenance/">Commercial maintenance</a> &middot; <a href="/services/warehouse-repairs/">Warehouse repairs</a></p>
+
+        <article class="service-card">
+          <span class="service-card__icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>
+          <h3>Commercial Maintenance &amp; Repairs</h3>
+          <p>Responsive scoping for interior drywall, doors, hardware, lighting, plumbing coordination, and punch lists.</p>
+          <a href="/services/commercial-maintenance/" class="service-card__link">Explore Services &rarr;</a>
         </article>
-        <article class="editorial-block">
-          <h3>Tenant improvements &amp; make-ready</h3>
-          <p>For owners and asset managers planning suite build-outs, alterations, or lease-return turnovers.</p>
-          <p class="muted" style="font-size:0.93rem;">Scope planning, selective demolition, framing/finishes, trade and permit coordination, white-shell put-backs, and final cleaning.</p>
-          <p><a href="/services/tenant-improvements/">Tenant improvements</a> &middot; <a href="/services/tenant-move-outs/">Tenant move-outs</a></p>
+
+        <article class="service-card">
+          <span class="service-card__icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg></span>
+          <h3>Tenant Improvements &amp; Make-Ready</h3>
+          <p>Suite build-outs, selective demolition, white-shell lease-return turnovers, and in-house final cleaning.</p>
+          <a href="/services/tenant-improvements/" class="service-card__link">Explore Services &rarr;</a>
+        </article>
+
+        <article class="service-card">
+          <span class="service-card__icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 20h20"/><path d="M5 20V8l7-5 7 5v12"/><path d="M9 20v-6h6v6"/></svg></span>
+          <h3>Warehouse &amp; Exterior Scopes</h3>
+          <p>Warehouse scrim &amp; insulation repair, dock concrete, bollards, stucco, gates, and site drainage upkeep.</p>
+          <a href="/services/warehouse-repairs/" class="service-card__link">Explore Services &rarr;</a>
         </article>
       </div>
     </div>
@@ -72,44 +142,97 @@ export function renderHomePage({ rev, settings, approvedProjects, seasonalFeatur
   <!-- Optional Configurable Seasonal Focus Placement -->
   ${renderSeasonalFeatureSlot(seasonalFeature)}
 
-  <!-- 3. Why Clients Choose the Relationship -->
-  <section class="section section--bone" aria-labelledby="diff-title">
-    <div class="container">
-      <span class="eyebrow">Accountable Relationship</span>
-      <h2 id="diff-title">Why commercial teams work with Service Maintenance</h2>
-      <div class="grid-2" style="margin-top:1.5rem;">
-        <div class="editorial-block editorial-block--bronze">
-          <h3>Care across the property’s lifecycle</h3>
-          <p>A working relationship can span daily porter upkeep, targeted repairs, lease turnovers, and larger tenant improvements without changing partners.</p>
-        </div>
-        <div class="editorial-block editorial-block--bronze">
-          <h3>In-house work plus specialty coordination</h3>
-          <p>We execute core maintenance, porter programs, and final suite cleaning in-house while coordinating vetted specialty trades transparently where licensing requires.</p>
-        </div>
-        <div class="editorial-block editorial-block--bronze">
-          <h3>Familiarity with operating commercial sites</h3>
-          <p>Scopes account for occupied suites, tenant hours, dock deliveries, and safety barricading—without making unrealistic zero-disruption promises.</p>
-        </div>
-        <div class="editorial-block editorial-block--bronze">
-          <h3>Attention to small repairs and larger work</h3>
-          <p>Ordinary maintenance tasks receive the same clear scope review and closeout attention as multi-trade commercial improvements.</p>
-        </div>
+  <!-- 4. Our Process (Split Left Heading + Right 4-Step Timeline) -->
+  <section class="section section--bone" aria-labelledby="process-title">
+    <div class="container ref-split">
+      <div>
+        <span class="eyebrow">Our Process</span>
+        <h2 id="process-title">A simple, transparent work process</h2>
+        <p class="muted">From first inquiry to completion review, every scope stays clear, documented, and accountable.</p>
+      </div>
+      <ol class="ref-process-grid">
+        <li class="ref-process-card">
+          <span class="ref-process-card__num">01</span>
+          <h3>Understand</h3>
+          <p>Review your property location, operating hours, photos or plans, and approval structure.</p>
+        </li>
+        <li class="ref-process-card">
+          <span class="ref-process-card__num">02</span>
+          <h3>Define Scope</h3>
+          <p>Confirm in-house tasks, specialty trade participation, access windows, and exclusions in writing.</p>
+        </li>
+        <li class="ref-process-card">
+          <span class="ref-process-card__num">03</span>
+          <h3>Coordinate</h3>
+          <p>Sequence crews, equipment, and site protection around active tenants and deliveries.</p>
+        </li>
+        <li class="ref-process-card">
+          <span class="ref-process-card__num">04</span>
+          <h3>Close &amp; Review</h3>
+          <p>Verify punch items, final cleaning, and closeout documentation with one accountable contact.</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 5. Properties We Serve (Split Left Heading + Right 4 Image Cards) -->
+  <section class="section" aria-labelledby="properties-title">
+    <div class="container ref-split">
+      <div>
+        <span class="eyebrow">Properties We Serve</span>
+        <h2 id="properties-title">Commercial properties across Greater Phoenix</h2>
+        <p class="muted">Tailored operational care for active industrial, retail, office, and multi-site portfolios.</p>
+        <p style="margin-top:1rem;"><a href="/properties/" class="btn btn--secondary btn--compact">All Property Types &rarr;</a></p>
+      </div>
+      <div class="grid-4">
+        <a href="/properties/industrial-warehouses/" class="prop-card">
+          <img src="/assets/prop-industrial.jpg" alt="Generic Greater Phoenix industrial and warehouse facility exterior" class="prop-card__img" width="400" height="300">
+          <span class="prop-card__body">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 20h20"/><path d="M4 20V9l8-4 8 4v11"/></svg>
+            Industrial &amp; Warehouses
+          </span>
+        </a>
+        <a href="/properties/retail-centers/" class="prop-card">
+          <img src="/assets/prop-retail.jpg" alt="Generic Southwest commercial retail center exterior" class="prop-card__img" width="400" height="300">
+          <span class="prop-card__body">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 9l2-5h14l2 5"/><path d="M5 9v11h14V9"/></svg>
+            Retail Centers
+          </span>
+        </a>
+        <a href="/properties/commercial-offices/" class="prop-card">
+          <img src="/assets/prop-office.jpg" alt="Generic Greater Phoenix commercial office building exterior" class="prop-card__img" width="400" height="300">
+          <span class="prop-card__body">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="2" width="16" height="20" rx="1"/><path d="M9 6h2"/><path d="M13 6h2"/><path d="M9 10h2"/><path d="M13 10h2"/></svg>
+            Commercial Offices
+          </span>
+        </a>
+        <a href="/property-managers/" class="prop-card">
+          <img src="/assets/prop-portfolio.jpg" alt="Generic Greater Phoenix multi-tenant commercial business park" class="prop-card__img" width="400" height="300">
+          <span class="prop-card__body">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>
+            Property Portfolios
+          </span>
+        </a>
       </div>
     </div>
   </section>
 
-  <!-- 4. Selected Work (Approved projects only; truthful fallback when 0 approved projects exist) -->
-  ${
-    approvedProjects.length > 0
-      ? `<section class="section" aria-labelledby="selected-work-title">
-          <div class="container">
-            <span class="eyebrow">Completed Work</span>
-            <h2 id="selected-work-title">Approved project examples</h2>
-            <div class="grid-3" style="margin-top:1.5rem;">
+  <!-- 6. Recent Projects (Approved Records Only; Truthful Empty State Otherwise) -->
+  <section class="section section--bone" aria-labelledby="selected-work-title">
+    <div class="container ref-split">
+      <div>
+        <span class="eyebrow">Recent Projects</span>
+        <h2 id="selected-work-title">${approvedProjects.length > 0 ? 'Real work. Verified results.' : 'Real work. Verified evidence.'}</h2>
+        <p class="muted">${approvedProjects.length > 0 ? 'Approved commercial maintenance and tenant improvement scopes.' : 'Case studies publish here only after completion verification and client naming permissions are recorded.'}</p>
+        <p style="margin-top:1rem;"><a href="/projects/" class="btn btn--secondary btn--compact">View All Projects &rarr;</a></p>
+      </div>
+      ${
+        approvedProjects.length > 0
+          ? `<div class="grid-2">
               ${approvedProjects
-                .slice(0, 3)
+                .slice(0, 2)
                 .map(
-                  (proj) => `<article class="panel">
+                  (proj) => `<article class="panel panel--light">
                     ${
                       proj.cover_derivative_key
                         ? renderResponsivePicture({
@@ -126,113 +249,122 @@ export function renderHomePage({ rev, settings, approvedProjects, seasonalFeatur
                     }
                     <span class="eyebrow">${escapeHtml(proj.property_type)} &middot; ${escapeHtml(proj.city_region)}</span>
                     <h3><a href="/projects/${escapeHtml(proj.slug)}/">${escapeHtml(proj.title)}</a></h3>
-                    <p style="font-size:0.94rem;">${escapeHtml(proj.agreed_scope)}</p>
+                    <p style="font-size:0.92rem;">${escapeHtml(proj.agreed_scope)}</p>
+                    <a href="/projects/${escapeHtml(proj.slug)}/" style="font-weight:600;">View Case Study &rarr;</a>
                   </article>`
                 )
                 .join('')}
-            </div>
-            <p style="margin-top:1.5rem;"><a href="/projects/" class="btn btn--secondary">View completed projects</a></p>
-          </div>
-        </section>`
-      : `<section class="section" aria-labelledby="proof-note-title">
-          <div class="container">
-            <div class="panel">
-              <span class="eyebrow">Verified Evidence Standard</span>
-              <h2 id="proof-note-title">Real project documentation—never fabricated placeholders</h2>
-              <p>Public case studies and before-and-after project records are published on our <a href="/projects/">Projects page</a> only after completion verification and client naming permissions are recorded. Meanwhile, procurement reviewers can inspect our <a href="/credentials/">verified credentials and Capabilities Statement</a>.</p>
-            </div>
-          </div>
-        </section>`
-  }
-
-  <!-- 5. How Work Is Managed -->
-  <section class="section section--bone" aria-labelledby="process-title">
-    <div class="container">
-      <span class="eyebrow">Delivery Process</span>
-      <h2 id="process-title">How every scope moves from inquiry to closeout</h2>
-      <ol class="process-list" style="margin-top:1.75rem;">
-        <li class="process-step">
-          <span class="process-step__num">01</span>
-          <h3>Understand the need</h3>
-          <p>Review your property location, operating hours, photos or plans, and approval structure.</p>
-        </li>
-        <li class="process-step">
-          <span class="process-step__num">02</span>
-          <h3>Define the scope</h3>
-          <p>Confirm in-house tasks, specialty trade participation, access windows, and exclusions in writing.</p>
-        </li>
-        <li class="process-step">
-          <span class="process-step__num">03</span>
-          <h3>Coordinate the work</h3>
-          <p>Sequence crews, equipment, and site protection around active tenants and deliveries.</p>
-        </li>
-        <li class="process-step">
-          <span class="process-step__num">04</span>
-          <h3>Review completion</h3>
-          <p>Verify punch items, final cleaning, and closeout documentation with one accountable contact.</p>
-        </li>
-      </ol>
+            </div>`
+          : `<div class="panel panel--light">
+              <h3>Approved project case studies are published only with verified rights</h3>
+              <p>Rather than displaying fabricated projects or placeholder testimonials, this showcase stays clear until client naming and media rights are approved. Meanwhile, procurement teams can review our verified Arizona ROC licensing and Capabilities Statement.</p>
+              <div class="card-actions">
+                <a href="/credentials/" class="btn btn--secondary btn--compact">View Credentials &rarr;</a>
+                <a href="/request-proposal/">Discuss your property scope &rarr;</a>
+              </div>
+            </div>`
+      }
     </div>
   </section>
 
-  <!-- 6. Properties Served -->
-  <section class="section" aria-labelledby="properties-title">
+  <!-- 7. Why Choose Us (5-Column Verified Strengths) -->
+  <section class="section" aria-labelledby="diff-title">
     <div class="container">
-      <span class="eyebrow">Operating Environments</span>
-      <h2 id="properties-title">Commercial properties we serve</h2>
-      <div class="grid-2" style="margin-top:1.5rem;">
-        <article class="editorial-block">
-          <h3><a href="/properties/industrial-warehouses/">Industrial &amp; warehouse facilities</a></h3>
-          <p>Scrim and insulation repair, dock concrete, bollards, welding, and industrial make-ready around active bays.</p>
-        </article>
-        <article class="editorial-block">
-          <h3><a href="/properties/retail-centers/">Retail centers</a></h3>
-          <p>Daytime porter routes, common-area presentation, pressure washing, exterior repairs, and inline turnovers.</p>
-        </article>
-        <article class="editorial-block">
-          <h3><a href="/properties/commercial-offices/">Commercial offices &amp; multi-tenant buildings</a></h3>
-          <p>Occupied-building repairs, corridor and door upkeep, and phased tenant improvements.</p>
-        </article>
-        <article class="editorial-block">
-          <h3><a href="/property-managers/">Commercial property management portfolios</a></h3>
-          <p>Multi-property inquiry routing, consolidated communication, and procurement-ready documentation.</p>
-        </article>
+      <div class="section-head-row">
+        <div>
+          <span class="eyebrow">Why Choose Us</span>
+          <h2 id="diff-title">A reliable partner for your commercial property</h2>
+        </div>
+        <a href="/about/" style="font-weight:600;white-space:nowrap;">Our Company Story (Since 1989) &rarr;</a>
+      </div>
+      <div class="why-strip">
+        <div class="why-item">
+          <span class="why-item__icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+          <strong>Our roots date to 1989</strong>
+        </div>
+        <div class="why-item">
+          <span class="why-item__icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+          <strong>In-House + Coordinated Trades</strong>
+        </div>
+        <div class="why-item">
+          <span class="why-item__icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+          <strong>Arizona ROC Licensed</strong>
+        </div>
+        <div class="why-item">
+          <span class="why-item__icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+          <strong>Written Scope &amp; Closeout</strong>
+        </div>
+        <div class="why-item">
+          <span class="why-item__icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></span>
+          <strong>Long-Term Property Care</strong>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- 7 & 8 & 9. Operating Practices, Story & Credentials Proof -->
-  <section class="section section--bone" aria-labelledby="story-title">
-    <div class="container grid-2">
+  <!-- 8. Documentation & Resources (Verified Existing Routes & Capabilities PDF Only) -->
+  <section class="section section--bone" aria-labelledby="docs-title">
+    <div class="container ref-split">
       <div>
-        <span class="eyebrow">Company Continuity</span>
-        <h2 id="story-title">Our roots date to 1989</h2>
-        <p>Patrick Voita founded Service Maintenance in 1989 providing day porter services across Greater Phoenix, incorporating in 1992 and expanding into tenant improvements with Greg Vandenberg in 2006. On June 29, 2020, Promptitude Inc. acquired the business to grow commercial maintenance and tenant improvement capabilities while preserving reliable recurring property care.</p>
-        <p><a href="/about/">Read our company story and core values</a></p>
+        <span class="eyebrow">Documentation &amp; Resources</span>
+        <h2 id="docs-title">Verified, ready-to-use information</h2>
+        <p class="muted">${escapeHtml(settings.legal_entity)} dba ${escapeHtml(settings.trading_name)} &middot; ${escapeHtml(settings.roc_numbers)}</p>
       </div>
-      <div class="panel panel--light">
-        <span class="eyebrow">Verified Credentials &amp; Operating Standards</span>
-        <h3>Scope clarity &amp; verified licensing</h3>
-        <ul>
-          <li><strong>Legal entity:</strong> ${escapeHtml(settings.legal_entity)} dba ${escapeHtml(settings.trading_name)}</li>
-          <li><strong>Arizona ROC:</strong> ${escapeHtml(settings.roc_numbers)}</li>
-          <li><strong>Insurance:</strong> ${escapeHtml(settings.insurance_statement)}</li>
-          <li><strong>Closeout discipline:</strong> Written change approvals and verified completion reviews—without unverified speed guarantees.</li>
-        </ul>
-        <p style="margin-bottom:0;"><a href="/credentials/">View credentials &amp; download Capabilities PDF</a></p>
+      <div class="doc-grid">
+        <a href="/credentials/capabilities.pdf" class="doc-tile" download="Service-Maintenance-Capabilities.pdf" data-track="download_capabilities">
+          <div><strong>Capabilities Statement</strong><span>Download PDF (Ungated)</span></div>
+          <span aria-hidden="true">&darr;</span>
+        </a>
+        <a href="/credentials/" class="doc-tile">
+          <div><strong>Licensing &amp; Insurance</strong><span>Verify ROC &amp; COI process</span></div>
+          <span aria-hidden="true">&rarr;</span>
+        </a>
+        <a href="/about/" class="doc-tile">
+          <div><strong>Company Continuity</strong><span>Founded 1989 &middot; Promptitude Inc.</span></div>
+          <span aria-hidden="true">&rarr;</span>
+        </a>
+        <a href="/service-area/" class="doc-tile">
+          <div><strong>Service Area</strong><span>Greater Phoenix markets</span></div>
+          <span aria-hidden="true">&rarr;</span>
+        </a>
       </div>
     </div>
   </section>
 
-  <!-- 10. Final Inquiry -->
-  <section class="section section--carbon" aria-labelledby="final-cta-title">
+  <!-- 9. Frequently Asked Questions -->
+  <section class="section" aria-labelledby="home-faq-title">
+    <div class="container ref-split">
+      <div>
+        <span class="eyebrow">FAQ</span>
+        <h2 id="home-faq-title">Common questions</h2>
+        <p class="muted">Clear answers about our services, process, and how we work with commercial property teams.</p>
+        <p style="margin-top:1rem;"><a href="/services/" class="btn btn--secondary btn--compact">Explore All Services &rarr;</a></p>
+      </div>
+      <div>
+        ${renderFaqAccordion(homeFaqs)}
+      </div>
+    </div>
+  </section>
+
+  <!-- 10. Dark Burgundy Proposal Banner -->
+  <section class="section" aria-labelledby="final-cta-title" style="padding-top:0;">
     <div class="container">
-      <span class="eyebrow" style="color:#D4CEC2;">Start a Conversation</span>
-      <h2 id="final-cta-title">Tell us about your Greater Phoenix property</h2>
-      <p>Share the property city or ZIP, what needs attention, and how you prefer to be reached. Photographs or an RFP PDF are optional—a request starts a conversation, with no automated estimate or minimum project size.</p>
-      <div class="hero__actions">
-        <a href="/request-proposal/" class="btn btn--primary">Request a proposal</a>
-        <a href="tel:${escapeHtml(settings.phone_e164)}" class="btn btn--ghost-light" data-track="phone_click">Call ${escapeHtml(settings.phone_display)}</a>
+      <div class="cta-banner">
+        <div>
+          <span class="eyebrow" style="color:#E4DCCE;">Get Started</span>
+          <h2 id="final-cta-title">Tell us about your Greater Phoenix property</h2>
+          <p style="margin-bottom:0;color:rgba(244,240,232,0.88);">Share your service need and property location—no automated estimate or minimum project size is required.</p>
+        </div>
+        <form class="cta-banner__form" method="GET" action="/request-proposal/">
+          <select name="service" aria-label="Select service needed" class="cta-banner__full">
+            <option value="">Select service needed...</option>
+            ${SERVICE_FAMILIES.filter((s) => !s.conditional)
+              .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.label)}</option>`)
+              .join('')}
+          </select>
+          <button type="submit" class="btn btn--secondary" style="background:var(--color-limestone);color:var(--color-carbon);border-color:var(--color-limestone);">Request a Proposal &rarr;</button>
+          <a href="tel:${escapeHtml(settings.phone_e164)}" class="btn btn--ghost-light" data-track="phone_click">Call ${escapeHtml(settings.phone_display)}</a>
+        </form>
       </div>
     </div>
   </section>
@@ -240,53 +372,97 @@ export function renderHomePage({ rev, settings, approvedProjects, seasonalFeatur
 }
 
 export function renderServiceOverviewPage({ buildingEngineerLive }) {
+  const serviceFaqs = [
+    {
+      q: 'Is there a minimum project size or recurring contract requirement?',
+      a: 'No minimum project size is published or required to start a conversation. We review single maintenance requests, multi-item repair lists, recurring porter routes, and tenant improvements.',
+    },
+    {
+      q: 'Which work is self-performed vs. coordinated with specialty trades?',
+      a: 'Core day porter care, general commercial maintenance, make-ready, and final suite cleaning are executed by our in-house team. Licensed specialty trades (such as electrical, plumbing, HVAC, or fire protection) are transparently coordinated when required by scope or code.',
+    },
+    {
+      q: 'Do you support out-of-state property owners and asset managers?',
+      a: 'Yes. Eligibility is based on where the commercial property is located (Greater Phoenix), and both US and international contact formats are supported.',
+    },
+    {
+      q: 'Can existing clients submit maintenance requests without going through a sales proposal?',
+      a: 'Yes. Active accounts can route maintenance needs directly through our Existing Customer Service Request form at /request-service/.',
+    },
+  ];
+
   return `
   <section class="section">
     <div class="container">
       ${renderBreadcrumbs([{ label: 'Home', href: '/' }, { label: 'Services', href: '/services/' }])}
-      <span class="eyebrow">Service Architecture</span>
-      <h1>Commercial property services across Greater Phoenix</h1>
-      <p style="font-size:1.12rem;color:var(--color-muted-stone);">Organized by buyer need across three core pillars and specialist property paths. Every page clearly distinguishes self-performed work from coordinated specialty trades.</p>
+      <div class="section-header">
+        <span class="eyebrow">Service Architecture</span>
+        <h1>Commercial property services across Greater Phoenix</h1>
+        <p class="section-header__lead">Organized by buyer need across three core pillars and specialist property paths. Every scope clearly distinguishes self-performed work from coordinated specialty trades.</p>
+      </div>
 
-      <div class="grid-3" style="margin-top:2rem;">
+      <div class="grid-3">
         <article class="panel">
-          <span class="eyebrow">Pillar 01</span>
+          <div class="pillar-card__head">
+            <span class="pillar-num">Pillar 01</span>
+          </div>
           <h2>Recurring property care</h2>
           <p>Scheduled upkeep that keeps retail centers, business parks, and commercial sites presentable.</p>
-          <ul>
+          <ul class="scope-list">
             <li><a href="/services/day-porter/">Day porter services</a></li>
             <li><a href="/services/recurring-property-care/">Recurring property care</a> (pressure washing, sweeping, roof cleaning/observations)</li>
             ${buildingEngineerLive ? '<li><a href="/services/building-engineer/">Building engineer services</a> (scheduled operations support)</li>' : ''}
           </ul>
+          <div class="card-actions">
+            <a href="/request-proposal/?service=day-porter" class="btn btn--primary btn--compact">Request porter / care proposal</a>
+          </div>
         </article>
 
         <article class="panel">
-          <span class="eyebrow">Pillar 02</span>
+          <div class="pillar-card__head">
+            <span class="pillar-num">Pillar 02</span>
+          </div>
           <h2>Commercial maintenance &amp; repairs</h2>
           <p>Responsive, accountable scoping for single repairs, multi-task lists, and active industrial sites.</p>
-          <ul>
+          <ul class="scope-list">
             <li><a href="/services/commercial-maintenance/">Commercial maintenance &amp; repairs</a></li>
             <li><a href="/services/warehouse-repairs/">Warehouse &amp; industrial repairs</a> (scrim, insulation, docks, bollards)</li>
             <li><a href="/services/exterior-site-maintenance/">Exterior &amp; site maintenance</a> (stucco, concrete, gates, drainage)</li>
           </ul>
+          <div class="card-actions">
+            <a href="/request-proposal/?service=commercial-maintenance" class="btn btn--primary btn--compact">Request repair scope</a>
+          </div>
         </article>
 
         <article class="panel">
-          <span class="eyebrow">Pillar 03</span>
+          <div class="pillar-card__head">
+            <span class="pillar-num">Pillar 03</span>
+          </div>
           <h2>Tenant improvements &amp; make-ready</h2>
           <p>Commercial interior alterations, lease-return restoration, and coordinated suite build-outs.</p>
-          <ul>
+          <ul class="scope-list">
             <li><a href="/services/tenant-improvements/">Tenant improvements &amp; renovations</a></li>
             <li><a href="/services/tenant-move-outs/">Tenant move-outs &amp; make-ready</a></li>
           </ul>
+          <div class="card-actions">
+            <a href="/request-proposal/?service=tenant-improvements" class="btn btn--primary btn--compact">Request TI / make-ready bid</a>
+          </div>
         </article>
       </div>
 
       <div class="panel panel--light" style="margin-top:2rem;">
         <h2>Need help choosing the right scope?</h2>
         <p>Already an active client needing maintenance routing? Use our <a href="/request-service/">Existing customer service request</a>. Otherwise, start a new inquiry and our team will route your property to the right owner.</p>
-        <a href="/request-proposal/" class="btn btn--primary">Request a proposal</a>
+        <div class="hero__actions" style="margin-top:0.75rem;">
+          <a href="/request-proposal/" class="btn btn--primary">Request a proposal</a>
+          <a href="/properties/" class="btn btn--secondary">Browse by property type</a>
+        </div>
       </div>
+
+      <section style="margin-top:2.75rem;" aria-labelledby="services-faq-heading">
+        <h2 id="services-faq-heading">Frequently asked questions</h2>
+        ${renderFaqAccordion(serviceFaqs)}
+      </section>
     </div>
   </section>`;
 }
@@ -551,6 +727,28 @@ export function renderProjectDetailPage({ project, pairs, gallery, isPreview = f
       <h1>${escapeHtml(project.title)}</h1>
       <p class="muted">${project.naming_decision === 'named' && project.client_name_internal ? `Client: ${escapeHtml(project.client_name_internal)}` : 'Client identity anonymized per project disclosure settings.'}</p>
 
+      ${
+        project.cover_derivative_key || (isPreview && project.cover_asset_id)
+          ? `<figure style="margin:1.25rem 0 0;max-width:54rem;">
+              ${
+                isPreview && project.cover_asset_id
+                  ? `<img src="/admin/api/media/preview/${escapeHtml(project.cover_asset_id)}" alt="${escapeHtml(project.cover_alt || project.title)}" style="width:100%;max-height:420px;object-fit:cover;border-radius:var(--radius-lg);object-position:${escapeHtml(project.cover_focal_x ?? 50)}% ${escapeHtml(project.cover_focal_y ?? 50)}%;">`
+                  : renderResponsivePicture({
+                      src: `/media/${project.cover_derivative_key}`,
+                      variantsJson: project.cover_variants_json,
+                      alt: project.cover_alt || project.title,
+                      width: 960,
+                      height: 540,
+                      focalX: project.cover_focal_x ?? 50,
+                      focalY: project.cover_focal_y ?? 50,
+                      loading: 'eager',
+                      style: 'width:100%;max-height:420px;object-fit:cover;border-radius:var(--radius-lg);',
+                    })
+              }
+            </figure>`
+          : ''
+      }
+
       <div class="grid-2" style="margin-top:1.75rem;">
         <div class="panel">
           <h2>Scope &amp; Delivery</h2>
@@ -701,6 +899,24 @@ export function renderCredentialsPage({ settings }) {
         <p><strong>Primary Property Types:</strong> Industrial, warehouse, and distribution facilities; retail centers; commercial office and multi-tenant buildings; commercial property management portfolios.</p>
         <p><strong>Geographic Coverage:</strong> Greater Phoenix, Arizona.</p>
       </section>
+
+      <section style="margin-top:2.5rem;" aria-labelledby="cred-faq-heading">
+        <h2 id="cred-faq-heading">Procurement &amp; vendor onboarding FAQ</h2>
+        ${renderFaqAccordion([
+          {
+            q: 'Can we verify Arizona ROC license status independently?',
+            a: `Yes. Current active license classifications for ${settings.legal_entity} (${settings.roc_numbers}) can be verified directly through the Arizona Registrar of Contractors at roc.az.gov.`,
+          },
+          {
+            q: 'How do property managers request a Certificate of Insurance (COI) or W-9?',
+            a: 'Use the "Request Insurance / Onboarding Docs" button above (which pre-selects Procurement / vendor documentation) or call our office line during business hours.',
+          },
+          {
+            q: 'Does holding a contractor license mean all trades are self-performed?',
+            a: 'No. We clearly distinguish in-house recurring care, general repairs, make-ready, and final cleaning from licensed specialty trades coordinated for electrical, plumbing, HVAC, or fire protection scopes.',
+          },
+        ])}
+      </section>
     </div>
   </section>`;
 }
@@ -771,9 +987,11 @@ export function renderProposalFormPage({ preselectedService = '', settings, csrf
   <section class="section">
     <div class="container">
       ${renderBreadcrumbs([{ label: 'Home', href: '/' }, { label: 'Request a proposal', href: '/request-proposal/' }])}
-      <span class="eyebrow">New Commercial Inquiry</span>
-      <h1>Request a proposal or property assessment</h1>
-      <p style="font-size:1.05rem;color:var(--color-muted-stone);">Provide your contact details, where the commercial property is located, and a brief note on what needs attention. No automated estimate or minimum project size is implied.</p>
+      <div class="section-header" style="max-width:52rem;">
+        <span class="eyebrow">New Commercial Inquiry</span>
+        <h1>Request a proposal or property assessment</h1>
+        <p class="section-header__lead">Share your contact details, commercial property location, and project scope in three quick steps. No automated estimate or minimum project size is implied.</p>
+      </div>
 
       <div id="form-error-summary" class="error-summary" hidden tabindex="-1" role="alert">
         <h2>Please review the highlighted fields</h2>
@@ -785,181 +1003,345 @@ export function renderProposalFormPage({ preselectedService = '', settings, csrf
         <a href="tel:${escapeHtml(settings.phone_e164)}">${escapeHtml(settings.phone_display)}</a> (${escapeHtml(settings.hours_display)}).
       </div>
 
-      <form id="proposal-form" class="form-stack" method="POST" action="/api/inquiries" enctype="multipart/form-data" novalidate data-form-type="proposal">
-        <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
-        <input type="hidden" name="idempotency_key" id="idempotency_key" value="">
-        <input type="hidden" name="privacy_notice_version" value="${escapeHtml(PRIVACY_NOTICE_VERSION)}">
-        <!-- Accessible honeypot for abuse control -->
-        <div class="visually-hidden" aria-hidden="true">
-          <label for="website_url_hp">Leave blank</label>
-          <input type="text" id="website_url_hp" name="website_url_hp" tabindex="-1" autocomplete="off">
+      <div class="inquiry-layout inquiry-layout--proposal">
+        <div class="proposal-card">
+          <ol class="proposal-stepper" id="proposal-stepper" aria-label="Proposal request steps">
+            <li class="proposal-stepper__item" data-step-indicator="1" data-state="active" aria-current="step">
+              <span class="proposal-stepper__num">1</span>
+              <span class="proposal-stepper__label">
+                <strong>Step 1</strong>
+                <span>Contact Info</span>
+              </span>
+            </li>
+            <li class="proposal-stepper__item" data-step-indicator="2" data-state="upcoming">
+              <span class="proposal-stepper__num">2</span>
+              <span class="proposal-stepper__label">
+                <strong>Step 2</strong>
+                <span>Property &amp; Service</span>
+              </span>
+            </li>
+            <li class="proposal-stepper__item" data-step-indicator="3" data-state="upcoming">
+              <span class="proposal-stepper__num">3</span>
+              <span class="proposal-stepper__label">
+                <strong>Step 3</strong>
+                <span>Requirements &amp; Review</span>
+              </span>
+            </li>
+          </ol>
+
+          <form id="proposal-form" class="form-stack form-stack--wide" method="POST" action="/api/inquiries" enctype="multipart/form-data" novalidate data-form-type="proposal">
+            <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+            <input type="hidden" name="idempotency_key" id="idempotency_key" value="">
+            <input type="hidden" name="privacy_notice_version" value="${escapeHtml(PRIVACY_NOTICE_VERSION)}">
+            <!-- Accessible honeypot for abuse control -->
+            <div class="visually-hidden" aria-hidden="true">
+              <label for="website_url_hp">Leave blank</label>
+              <input type="text" id="website_url_hp" name="website_url_hp" tabindex="-1" autocomplete="off">
+            </div>
+
+            <!-- STEP 1: Contact Information -->
+            <section class="proposal-step" data-step="1" aria-labelledby="step-1-heading">
+              <div class="proposal-step__header">
+                <h2 id="step-1-heading" tabindex="-1">Step 1: Contact Information</h2>
+                <p>Tell us who to follow up with and your preferred way to be reached.</p>
+              </div>
+
+              <div class="field-row">
+                <div class="field">
+                  <label for="name">Your name <span aria-hidden="true">*</span></label>
+                  <input type="text" id="name" name="name" required maxlength="100" autocomplete="name" data-error="err-name">
+                  <div id="err-name" class="error-msg"><span role="img" aria-label="Error">!</span> Enter your name (up to 100 characters).</div>
+                </div>
+
+                <div class="field">
+                  <label for="company">Company or organization <span aria-hidden="true">*</span></label>
+                  <input type="text" id="company" name="company" required maxlength="150" autocomplete="organization" aria-describedby="hint-company" data-error="err-company">
+                  <span id="hint-company" class="hint">Property firm, owner, or tenant business name.</span>
+                  <div id="err-company" class="error-msg"><span role="img" aria-label="Error">!</span> Enter your company or organization name.</div>
+                </div>
+              </div>
+
+              <fieldset class="choice-group">
+                <legend>Preferred contact method <span aria-hidden="true">*</span></legend>
+                <div class="field-row">
+                  <div class="choice-row">
+                    <input type="radio" id="pref-email" name="preferred_contact_method" value="email" checked>
+                    <label for="pref-email">Email</label>
+                  </div>
+                  <div class="choice-row">
+                    <input type="radio" id="pref-phone" name="preferred_contact_method" value="telephone">
+                    <label for="pref-phone">Telephone</label>
+                  </div>
+                </div>
+              </fieldset>
+
+              <div class="field-row">
+                <div class="field">
+                  <label for="email">Email address <span id="email-req-mark" aria-hidden="true">*</span></label>
+                  <input type="email" id="email" name="email" autocomplete="email" inputmode="email" autocorrect="off" autocapitalize="none" spellcheck="false" aria-describedby="hint-email" data-error="err-email" required>
+                  <span id="hint-email" class="hint">Personal or business email domains are accepted.</span>
+                  <div id="err-email" class="error-msg"><span role="img" aria-label="Error">!</span> Enter a valid email address (for example, name@company.com).</div>
+                </div>
+
+                <div class="field">
+                  <label for="telephone">Telephone <span id="phone-req-mark" class="visually-hidden">(optional when email selected)</span></label>
+                  <input type="tel" id="telephone" name="telephone" autocomplete="tel" inputmode="tel" aria-describedby="hint-phone" data-error="err-telephone">
+                  <span id="hint-phone" class="hint">US or international formats supported for remote owners.</span>
+                  <div id="err-telephone" class="error-msg"><span role="img" aria-label="Error">!</span> Enter a valid telephone number (7 to 15 digits).</div>
+                </div>
+              </div>
+
+              <div class="proposal-step__actions proposal-step__actions--end">
+                <button type="button" class="btn btn--primary btn--lg" data-next-step="2">Continue to Property &amp; Service &rarr;</button>
+              </div>
+            </section>
+
+            <!-- STEP 2: Property & Service Information -->
+            <section class="proposal-step" data-step="2" aria-labelledby="step-2-heading">
+              <div class="proposal-step__header">
+                <h2 id="step-2-heading" tabindex="-1">Step 2: Property &amp; Service Information</h2>
+                <p>Select the commercial service needed and tell us where the property is located.</p>
+              </div>
+
+              <div class="field-row">
+                <div class="field">
+                  <label for="service_needed">Service needed <span aria-hidden="true">*</span></label>
+                  <select id="service_needed" name="service_needed" required data-error="err-service">
+                    <option value="">Select a service...</option>
+                    ${SERVICE_FAMILIES.filter((s) => !s.conditional)
+                      .map(
+                        (s) =>
+                          `<option value="${escapeHtml(s.id)}"${preselectedService === s.id ? ' selected' : ''}>${escapeHtml(s.label)}</option>`
+                      )
+                      .join('')}
+                  </select>
+                  <div id="err-service" class="error-msg"><span role="img" aria-label="Error">!</span> Select the service needed.</div>
+                </div>
+
+                <div class="field">
+                  <label for="property_city_or_zip">Property city or ZIP <span aria-hidden="true">*</span></label>
+                  <input type="text" id="property_city_or_zip" name="property_city_or_zip" required maxlength="120" aria-describedby="hint-prop-loc" data-error="err-prop-loc">
+                  <span id="hint-prop-loc" class="hint">Location of the property (even if your office is out of state).</span>
+                  <div id="err-prop-loc" class="error-msg"><span role="img" aria-label="Error">!</span> Enter the property city or ZIP.</div>
+                </div>
+              </div>
+
+              <div class="field-row">
+                <div class="field">
+                  <label for="property_type">Property type (optional)</label>
+                  <select id="property_type" name="property_type">
+                    <option value="">Prefer not to specify / Not sure</option>
+                    <option value="warehouse-industrial">Warehouse / Industrial / Distribution</option>
+                    <option value="retail">Retail Center</option>
+                    <option value="office">Office / Multi-Tenant Commercial</option>
+                    <option value="other-commercial">Other Commercial</option>
+                  </select>
+                </div>
+
+                <div class="field">
+                  <label for="desired_timing">Desired timing (optional)</label>
+                  <select id="desired_timing" name="desired_timing">
+                    <option value="flexible">Flexible / Exploratory</option>
+                    <option value="planning">Planning ahead</option>
+                    <option value="upcoming">Upcoming work (next 30–60 days)</option>
+                    <option value="time-sensitive">Time-sensitive need</option>
+                    <option value="date-range">Specific date window</option>
+                  </select>
+                </div>
+              </div>
+
+              <div id="time-sensitive-note" class="status-banner status-banner--warning" hidden>
+                <strong>Time-sensitive inquiry note:</strong> Our monitored office line is <a href="tel:${escapeHtml(settings.phone_e164)}">${escapeHtml(settings.phone_display)}</a> (${escapeHtml(settings.hours_display)}). Submitting this form routes your request for operational review; it does not imply immediate dispatch.
+              </div>
+
+              <div class="choice-row" style="margin-bottom:1.25rem;">
+                <input type="checkbox" id="multiple_properties" name="multiple_properties">
+                <label for="multiple_properties">This inquiry covers multiple commercial properties</label>
+              </div>
+
+              <div id="multi-prop-fields" class="panel" hidden style="margin-bottom:1.4rem;">
+                <div class="field-row">
+                  <div class="field" style="margin-bottom:0;">
+                    <label for="site_count">Approximate number of sites</label>
+                    <input type="text" id="site_count" name="site_count" maxlength="40">
+                  </div>
+                  <div class="field" style="margin-bottom:0;">
+                    <label for="coverage_detail">Cities / portfolio overview</label>
+                    <input type="text" id="coverage_detail" name="coverage_detail" maxlength="300">
+                  </div>
+                </div>
+              </div>
+
+              <!-- Conditional TI/RFP Section (shown only for Tenant Improvements / Move-Outs) -->
+              <div id="ti-conditional-fields" class="panel" hidden style="margin-bottom:1.4rem;">
+                <h3 style="margin-bottom:0.85rem;">Tenant Improvement / RFP Details (Optional)</h3>
+                <div class="field-row">
+                  <div class="field"><label for="ti_property_address">Property street address</label><input type="text" id="ti_property_address" name="ti_property_address" maxlength="200"></div>
+                  <div class="field"><label for="ti_occupancy">Space condition</label>
+                    <select id="ti_occupancy" name="ti_occupancy"><option value="">Select...</option><option value="occupied">Occupied</option><option value="vacant">Vacant</option><option value="partial">Partially occupied</option></select>
+                  </div>
+                </div>
+                <div class="field-row">
+                  <div class="field"><label for="ti_plans_available">Architectural plans / drawings status</label>
+                    <select id="ti_plans_available" name="ti_plans_available">
+                      <option value="">Select...</option>
+                      <option value="Complete plans available">Complete plans available</option>
+                      <option value="Preliminary sketches only">Preliminary sketches only</option>
+                      <option value="No plans yet — scope estimate needed">No plans yet — scope estimate needed</option>
+                    </select>
+                  </div>
+                  <div class="field"><label for="ti_bid_due_date">Bid due date (if RFP)</label><input type="date" id="ti_bid_due_date" name="ti_bid_due_date"></div>
+                </div>
+                <div class="field-row">
+                  <div class="field"><label for="ti_completion_window">Target completion window</label><input type="text" id="ti_completion_window" name="ti_completion_window" maxlength="80"></div>
+                  <div class="field"><label for="project_budget">Estimated project budget band</label>
+                    <select id="project_budget" name="project_budget">
+                      <option value="Not established">Not established</option>
+                      <option value="Prefer to discuss">Prefer to discuss</option>
+                      <option value="Under $25,000">Under $25,000</option>
+                      <option value="$25,000 - $100,000">$25,000 - $100,000</option>
+                      <option value="Over $100,000">Over $100,000</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="field" style="margin-bottom:0;"><label for="ti_landlord_involvement">Owner / landlord approval contact</label><input type="text" id="ti_landlord_involvement" name="ti_landlord_involvement" maxlength="120"></div>
+              </div>
+
+              <!-- Conditional Recurring Care Section (shown only for Day Porter / Recurring Property Care) -->
+              <div id="recurring-conditional-fields" class="panel" hidden style="margin-bottom:1.4rem;">
+                <h3 style="margin-bottom:0.85rem;">Recurring Program Details (Optional)</h3>
+                <div class="field-row">
+                  <div class="field"><label for="rc_frequency">Desired service frequency</label><input type="text" id="rc_frequency" name="rc_frequency" maxlength="60"></div>
+                  <div class="field"><label for="rc_site_size">Approximate site size / building count</label><input type="text" id="rc_site_size" name="rc_site_size" maxlength="80"></div>
+                </div>
+                <div class="field" style="margin-bottom:0;"><label for="rc_current_arrangement">Current service arrangement &amp; main concerns</label><input type="text" id="rc_current_arrangement" name="rc_current_arrangement" maxlength="200"></div>
+              </div>
+
+              <div class="proposal-step__actions">
+                <button type="button" class="btn btn--secondary" data-prev-step="1">&larr; Back</button>
+                <button type="button" class="btn btn--primary btn--lg" data-next-step="3">Continue to Requirements &amp; Review &rarr;</button>
+              </div>
+            </section>
+
+            <!-- STEP 3: Project Requirements & Review -->
+            <section class="proposal-step" data-step="3" aria-labelledby="step-3-heading">
+              <div class="proposal-step__header">
+                <h2 id="step-3-heading" tabindex="-1">Step 3: Project Requirements &amp; Review</h2>
+                <p>Describe what needs attention, attach optional photos or RFP files, and review your summary.</p>
+              </div>
+
+              <div class="field">
+                <label for="description">Brief description of what needs attention <span aria-hidden="true">*</span></label>
+                <span id="hint-desc" class="hint">Share the work needed, access hours, or questions. Do not include security gate codes or sensitive passwords.</span>
+                <textarea id="description" name="description" required maxlength="3000" aria-describedby="hint-desc" data-error="err-desc"></textarea>
+                <div id="err-desc" class="error-msg"><span role="img" aria-label="Error">!</span> Describe what needs attention.</div>
+              </div>
+
+              <div class="field">
+                <label for="attachments">Optional site photos or RFP documents</label>
+                <span id="hint-files" class="hint">Allowed: PDF, JPEG, or PNG. Up to 5 files, 10 MB per file, 25 MB total. For HEIC or large drawings, submit without files and our team will send a secure upload link.</span>
+                <input type="file" id="attachments" name="attachments" multiple accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" aria-describedby="hint-files">
+                <div id="upload-status" class="hint" aria-live="polite"></div>
+              </div>
+
+              <div class="review-summary" id="proposal-review-summary" aria-label="Review your proposal request">
+                <h3 class="review-summary__title">Review Your Information</h3>
+                <div class="review-group">
+                  <div class="review-group__head">
+                    <h4>Contact Information</h4>
+                    <button type="button" class="review-edit-btn" data-goto-step="1">Edit</button>
+                  </div>
+                  <dl class="review-dl" id="review-contact-dl"></dl>
+                </div>
+                <div class="review-group">
+                  <div class="review-group__head">
+                    <h4>Property &amp; Service</h4>
+                    <button type="button" class="review-edit-btn" data-goto-step="2">Edit</button>
+                  </div>
+                  <dl class="review-dl" id="review-property-dl"></dl>
+                </div>
+                <div class="review-group" id="review-conditional-group" hidden>
+                  <div class="review-group__head">
+                    <h4 id="review-conditional-title">Program Details</h4>
+                    <button type="button" class="review-edit-btn" data-goto-step="2">Edit</button>
+                  </div>
+                  <dl class="review-dl" id="review-conditional-dl"></dl>
+                </div>
+                <div class="review-group">
+                  <div class="review-group__head">
+                    <h4>Requirements &amp; Files</h4>
+                  </div>
+                  <dl class="review-dl" id="review-scope-dl"></dl>
+                </div>
+              </div>
+
+              <div class="panel panel--light" style="margin-bottom:1.25rem;">
+                <p style="font-size:0.9rem;margin-bottom:0.75rem;">
+                  <strong>Privacy Notice:</strong> Information submitted here is used to review and respond to your commercial service inquiry (<a href="/privacy/">Privacy Policy</a>).
+                </p>
+                <div class="choice-row">
+                  <input type="checkbox" id="marketing_opt_in" name="marketing_opt_in">
+                  <label for="marketing_opt_in">Optional: Send occasional seasonal property care reminders from Service Maintenance (never required to request a proposal).</label>
+                </div>
+              </div>
+
+              <div class="proposal-step__actions">
+                <button type="button" class="btn btn--secondary" data-prev-step="2">&larr; Back</button>
+                <button type="submit" class="btn btn--primary btn--lg" id="submit-proposal-btn">Submit Proposal Request &rarr;</button>
+              </div>
+            </section>
+          </form>
         </div>
 
-        <div class="field">
-          <label for="name">Your name <span aria-hidden="true">*</span></label>
-          <input type="text" id="name" name="name" required maxlength="100" autocomplete="name" data-error="err-name">
-          <div id="err-name" class="error-msg"><span role="img" aria-label="Error">!</span> Enter your name (up to 100 characters).</div>
-        </div>
-
-        <div class="field">
-          <label for="company">Company or organization <span aria-hidden="true">*</span></label>
-          <span id="hint-company" class="hint">Commercial property firm, owner, or tenant business name.</span>
-          <input type="text" id="company" name="company" required maxlength="150" autocomplete="organization" aria-describedby="hint-company" data-error="err-company">
-          <div id="err-company" class="error-msg"><span role="img" aria-label="Error">!</span> Enter your company or organization name.</div>
-        </div>
-
-        <fieldset class="choice-group">
-          <legend>Preferred contact method <span aria-hidden="true">*</span></legend>
-          <div class="choice-row">
-            <input type="radio" id="pref-email" name="preferred_contact_method" value="email" checked>
-            <label for="pref-email">Email</label>
+        <aside class="inquiry-sidebar" aria-label="Proposal expectations and direct contact">
+          <div class="next-steps-card">
+            <span class="eyebrow">What Happens Next</span>
+            <h2 style="font-size:1.35rem;margin-bottom:0.25rem;">Clear review &mdash; no automated quotes</h2>
+            <p style="font-size:0.9rem;color:var(--color-muted-stone);margin-bottom:0;">Every commercial inquiry is reviewed directly by our Greater Phoenix operations and estimating team.</p>
+            <ol class="next-steps-list">
+              <li>
+                <span class="next-steps-list__num" aria-hidden="true">1</span>
+                <div><strong style="color:var(--color-carbon);display:block;">Recorded receipt</strong>You receive an immediate reference ID upon submission.</div>
+              </li>
+              <li>
+                <span class="next-steps-list__num" aria-hidden="true">2</span>
+                <div><strong style="color:var(--color-carbon);display:block;">Operations routing</strong>Your property is routed to the appropriate estimating, TI, or day porter lead.</div>
+              </li>
+              <li>
+                <span class="next-steps-list__num" aria-hidden="true">3</span>
+                <div><strong style="color:var(--color-carbon);display:block;">Written scope follow-up</strong>We follow up during ${escapeHtml(settings.hours_display)} to confirm site access, drawings, or walkthrough needs.</div>
+              </li>
+            </ol>
+            <hr style="border:none;border-top:1px solid var(--border-subtle);margin:1.25rem 0;">
+            <p style="font-size:0.92rem;margin-bottom:0.5rem;">
+              <strong>Direct Office Line:</strong><br>
+              <a href="tel:${escapeHtml(settings.phone_e164)}" data-track="phone_click" style="font-weight:600;">${escapeHtml(settings.phone_display)}</a><br>
+              <span style="font-size:0.84rem;color:var(--color-muted-stone);">${escapeHtml(settings.hours_display)}</span>
+            </p>
+            <p style="font-size:0.86rem;color:var(--color-muted-stone);margin-bottom:0;">
+              Active client needing routine maintenance? <a href="/request-service/">Use the existing customer request form</a>.
+            </p>
           </div>
-          <div class="choice-row">
-            <input type="radio" id="pref-phone" name="preferred_contact_method" value="telephone">
-            <label for="pref-phone">Telephone</label>
-          </div>
-        </fieldset>
+        </aside>
+      </div>
 
-        <div class="field">
-          <label for="email">Email address <span id="email-req-mark" aria-hidden="true">*</span></label>
-          <span id="hint-email" class="hint">Personal or business email domains are both accepted.</span>
-          <input type="email" id="email" name="email" autocomplete="email" inputmode="email" autocorrect="off" autocapitalize="none" spellcheck="false" aria-describedby="hint-email" data-error="err-email" required>
-          <div id="err-email" class="error-msg"><span role="img" aria-label="Error">!</span> Enter a valid email address (for example, name@company.com).</div>
-        </div>
-
-        <div class="field">
-          <label for="telephone">Telephone <span id="phone-req-mark" class="visually-hidden">(optional when email selected)</span></label>
-          <span id="hint-phone" class="hint">US or international phone formats supported for remote property owners.</span>
-          <input type="tel" id="telephone" name="telephone" autocomplete="tel" inputmode="tel" aria-describedby="hint-phone" data-error="err-telephone">
-          <div id="err-telephone" class="error-msg"><span role="img" aria-label="Error">!</span> Enter a valid telephone number (7 to 15 digits).</div>
-        </div>
-
-        <div class="field">
-          <label for="service_needed">Service needed <span aria-hidden="true">*</span></label>
-          <select id="service_needed" name="service_needed" required data-error="err-service">
-            <option value="">Select a service...</option>
-            ${SERVICE_FAMILIES.filter((s) => !s.conditional)
-              .map(
-                (s) =>
-                  `<option value="${escapeHtml(s.id)}"${preselectedService === s.id ? ' selected' : ''}>${escapeHtml(s.label)}</option>`
-              )
-              .join('')}
-          </select>
-          <div id="err-service" class="error-msg"><span role="img" aria-label="Error">!</span> Select the service needed.</div>
-        </div>
-
-        <div class="field">
-          <label for="property_city_or_zip">Property city or ZIP <span aria-hidden="true">*</span></label>
-          <span id="hint-prop-loc" class="hint">Location of the commercial property (even if your office is outside Arizona).</span>
-          <input type="text" id="property_city_or_zip" name="property_city_or_zip" required maxlength="120" aria-describedby="hint-prop-loc" data-error="err-prop-loc">
-          <div id="err-prop-loc" class="error-msg"><span role="img" aria-label="Error">!</span> Enter the property city or ZIP.</div>
-        </div>
-
-        <div class="field">
-          <label for="property_type">Property type (optional)</label>
-          <select id="property_type" name="property_type">
-            <option value="">Prefer not to specify / Not sure</option>
-            <option value="warehouse-industrial">Warehouse / Industrial / Distribution</option>
-            <option value="retail">Retail Center</option>
-            <option value="office">Office / Multi-Tenant Commercial</option>
-            <option value="other-commercial">Other Commercial</option>
-          </select>
-        </div>
-
-        <div class="field">
-          <label for="desired_timing">Desired timing (optional)</label>
-          <select id="desired_timing" name="desired_timing">
-            <option value="flexible">Flexible / Exploratory</option>
-            <option value="planning">Planning ahead</option>
-            <option value="upcoming">Upcoming work (next 30–60 days)</option>
-            <option value="time-sensitive">Time-sensitive need</option>
-            <option value="date-range">Specific date window</option>
-          </select>
-        </div>
-
-        <div id="time-sensitive-note" class="status-banner status-banner--warning" hidden>
-          <strong>Time-sensitive inquiry note:</strong> Our monitored office line is <a href="tel:${escapeHtml(settings.phone_e164)}">${escapeHtml(settings.phone_display)}</a> (${escapeHtml(settings.hours_display)}). Submitting this form routes your request for operational review; it does not imply immediate dispatch.
-        </div>
-
-        <div class="choice-row" style="margin-bottom:1.25rem;">
-          <input type="checkbox" id="multiple_properties" name="multiple_properties">
-          <label for="multiple_properties">This inquiry covers multiple commercial properties</label>
-        </div>
-
-        <div id="multi-prop-fields" class="panel" hidden style="margin-bottom:1.4rem;">
-          <div class="field">
-            <label for="site_count">Approximate number of sites</label>
-            <input type="text" id="site_count" name="site_count" maxlength="40">
-          </div>
-          <div class="field" style="margin-bottom:0;">
-            <label for="coverage_detail">Cities / portfolio overview</label>
-            <input type="text" id="coverage_detail" name="coverage_detail" maxlength="300">
-          </div>
-        </div>
-
-        <!-- Conditional TI/RFP Section -->
-        <div id="ti-conditional-fields" class="panel" hidden style="margin-bottom:1.4rem;">
-          <h3>Tenant Improvement / RFP Details (Optional)</h3>
-          <div class="field"><label for="ti_property_address">Property street address</label><input type="text" id="ti_property_address" name="ti_property_address" maxlength="200"></div>
-          <div class="field"><label for="ti_occupancy">Space condition</label>
-            <select id="ti_occupancy" name="ti_occupancy"><option value="">Select...</option><option value="occupied">Occupied</option><option value="vacant">Vacant</option><option value="partial">Partially occupied</option></select>
-          </div>
-          <div class="field"><label for="ti_plans_available">Architectural plans / drawings status</label>
-            <select id="ti_plans_available" name="ti_plans_available">
-              <option value="">Select...</option>
-              <option value="Complete plans available">Complete plans available</option>
-              <option value="Preliminary sketches only">Preliminary sketches only</option>
-              <option value="No plans yet — scope estimate needed">No plans yet — scope estimate needed</option>
-            </select>
-          </div>
-          <div class="field"><label for="ti_bid_due_date">Bid due date (if RFP)</label><input type="date" id="ti_bid_due_date" name="ti_bid_due_date"></div>
-          <div class="field"><label for="ti_completion_window">Target completion window</label><input type="text" id="ti_completion_window" name="ti_completion_window" maxlength="80"></div>
-          <div class="field"><label for="project_budget">Estimated project budget band</label>
-            <select id="project_budget" name="project_budget">
-              <option value="Not established">Not established</option>
-              <option value="Prefer to discuss">Prefer to discuss</option>
-              <option value="Under $25,000">Under $25,000</option>
-              <option value="$25,000 - $100,000">$25,000 - $100,000</option>
-              <option value="Over $100,000">Over $100,000</option>
-            </select>
-          </div>
-          <div class="field" style="margin-bottom:0;"><label for="ti_landlord_involvement">Owner / landlord approval contact</label><input type="text" id="ti_landlord_involvement" name="ti_landlord_involvement" maxlength="120"></div>
-        </div>
-
-        <!-- Conditional Recurring Care Section -->
-        <div id="recurring-conditional-fields" class="panel" hidden style="margin-bottom:1.4rem;">
-          <h3>Recurring Program Details (Optional)</h3>
-          <div class="field"><label for="rc_frequency">Desired service frequency</label><input type="text" id="rc_frequency" name="rc_frequency" maxlength="60"></div>
-          <div class="field"><label for="rc_site_size">Approximate site size / building count</label><input type="text" id="rc_site_size" name="rc_site_size" maxlength="80"></div>
-          <div class="field" style="margin-bottom:0;"><label for="rc_current_arrangement">Current service arrangement &amp; main concerns</label><input type="text" id="rc_current_arrangement" name="rc_current_arrangement" maxlength="200"></div>
-        </div>
-
-        <div class="field">
-          <label for="description">Brief description of what needs attention <span aria-hidden="true">*</span></label>
-          <span id="hint-desc" class="hint">Share the work needed, access hours, or questions. Do not include security gate codes or sensitive passwords.</span>
-          <textarea id="description" name="description" required maxlength="3000" aria-describedby="hint-desc" data-error="err-desc"></textarea>
-          <div id="err-desc" class="error-msg"><span role="img" aria-label="Error">!</span> Describe what needs attention.</div>
-        </div>
-
-        <div class="field">
-          <label for="attachments">Optional site photos or RFP documents</label>
-          <span id="hint-files" class="hint">Allowed: PDF, JPEG, or PNG. Up to 5 files, 10 MB per file, 25 MB total. For HEIC or large drawings, submit without files and our team will send a secure upload link.</span>
-          <input type="file" id="attachments" name="attachments" multiple accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" aria-describedby="hint-files">
-          <div id="upload-status" class="hint" aria-live="polite"></div>
-        </div>
-
-        <div class="panel panel--light" style="margin-bottom:1.4rem;">
-          <p style="font-size:0.9rem;margin-bottom:0.75rem;">
-            <strong>Privacy Notice:</strong> Information submitted here is used to review and respond to your commercial service inquiry (<a href="/privacy/">Privacy Policy</a>).
-          </p>
-          <div class="choice-row">
-            <input type="checkbox" id="marketing_opt_in" name="marketing_opt_in">
-            <label for="marketing_opt_in">Optional: Send occasional seasonal property care reminders from Service Maintenance (never required to request a proposal).</label>
-          </div>
-        </div>
-
-        <button type="submit" class="btn btn--primary" id="submit-proposal-btn">Submit proposal request</button>
-      </form>
+      <section style="margin-top:2.75rem;" aria-labelledby="prop-faq-heading">
+        <h2 id="prop-faq-heading">Proposal &amp; scoping FAQ</h2>
+        ${renderFaqAccordion([
+          {
+            q: 'Do I need architectural drawings or site photos before submitting?',
+            a: 'No. Photos, RFP PDFs, and drawings are optional. If you have large plans or HEIC files, submit your details without attachments and our team can send a secure upload link.',
+          },
+          {
+            q: 'Can out-of-state property owners or remote asset managers submit a request?',
+            a: 'Yes. As long as the commercial property is in Greater Phoenix, both US and international telephone numbers and personal or business emails are accepted.',
+          },
+          {
+            q: 'Does submitting this form commit us to a contract or generate an automated price?',
+            a: 'No. Every commercial scope is reviewed in person or by phone/photos with clear written inclusions and exclusions before any work is authorized.',
+          },
+        ])}
+      </section>
     </div>
   </section>`;
 }
@@ -969,9 +1351,11 @@ export function renderServiceRequestFormPage({ settings, csrfToken }) {
   <section class="section">
     <div class="container">
       ${renderBreadcrumbs([{ label: 'Home', href: '/' }, { label: 'Existing customer service', href: '/request-service/' }])}
-      <span class="eyebrow">Operations Routing</span>
-      <h1>Existing customer service request</h1>
-      <p style="font-size:1.05rem;color:var(--color-muted-stone);">Submit a maintenance or property care request for an active commercial account. Submitting this form routes your request to operations for review and does not claim an approved work order or guaranteed dispatch time.</p>
+      <div class="section-header" style="max-width:52rem;">
+        <span class="eyebrow">Operations Routing</span>
+        <h1>Existing customer service request</h1>
+        <p class="section-header__lead">Submit a maintenance or property care request for an active commercial account. Submitting this form routes your request to operations for review and does not claim an approved work order or guaranteed dispatch time.</p>
+      </div>
 
       <div id="form-error-summary" class="error-summary" hidden tabindex="-1" role="alert">
         <h2>Please review the highlighted fields</h2>
@@ -982,74 +1366,108 @@ export function renderServiceRequestFormPage({ settings, csrfToken }) {
         <strong>Request was not confirmed.</strong> Your entries are preserved below. Call our office line at <a href="tel:${escapeHtml(settings.phone_e164)}">${escapeHtml(settings.phone_display)}</a> (${escapeHtml(settings.hours_display)}).
       </div>
 
-      <form id="service-request-form" class="form-stack" method="POST" action="/api/service-requests" novalidate data-form-type="service_request">
-        <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
-        <input type="hidden" name="idempotency_key" id="idempotency_key" value="">
+      <div class="inquiry-layout inquiry-layout--proposal">
+        <div class="proposal-card">
+          <form id="service-request-form" class="form-stack form-stack--wide" method="POST" action="/api/service-requests" novalidate data-form-type="service_request">
+            <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}">
+            <input type="hidden" name="idempotency_key" id="idempotency_key" value="">
 
-        <div class="field">
-          <label for="sr-name">Your name <span aria-hidden="true">*</span></label>
-          <input type="text" id="sr-name" name="name" required maxlength="100" autocomplete="name" data-error="err-sr-name">
-          <div id="err-sr-name" class="error-msg"><span role="img" aria-label="Error">!</span> Enter your name.</div>
+            <div class="field-row">
+              <div class="field">
+                <label for="sr-name">Your name <span aria-hidden="true">*</span></label>
+                <input type="text" id="sr-name" name="name" required maxlength="100" autocomplete="name" data-error="err-sr-name">
+                <div id="err-sr-name" class="error-msg"><span role="img" aria-label="Error">!</span> Enter your name.</div>
+              </div>
+
+              <div class="field">
+                <label for="sr-company">Company / Management Firm <span aria-hidden="true">*</span></label>
+                <input type="text" id="sr-company" name="company" required maxlength="150" autocomplete="organization" data-error="err-sr-company">
+                <div id="err-sr-company" class="error-msg"><span role="img" aria-label="Error">!</span> Enter your company name.</div>
+              </div>
+            </div>
+
+            <fieldset class="choice-group">
+              <legend>Preferred contact method <span aria-hidden="true">*</span></legend>
+              <div class="field-row">
+                <div class="choice-row">
+                  <input type="radio" id="sr-pref-email" name="preferred_contact_method" value="email" checked>
+                  <label for="sr-pref-email">Email</label>
+                </div>
+                <div class="choice-row">
+                  <input type="radio" id="sr-pref-phone" name="preferred_contact_method" value="telephone">
+                  <label for="sr-pref-phone">Telephone</label>
+                </div>
+              </div>
+            </fieldset>
+
+            <div class="field-row">
+              <div class="field">
+                <label for="sr-email">Email address</label>
+                <input type="email" id="sr-email" name="email" autocomplete="email" required data-error="err-sr-email">
+                <div id="err-sr-email" class="error-msg"><span role="img" aria-label="Error">!</span> Enter a valid email address.</div>
+              </div>
+
+              <div class="field">
+                <label for="sr-phone">Telephone</label>
+                <input type="tel" id="sr-phone" name="telephone" autocomplete="tel" data-error="err-sr-phone">
+                <div id="err-sr-phone" class="error-msg"><span role="img" aria-label="Error">!</span> Enter a valid telephone number.</div>
+              </div>
+            </div>
+
+            <div class="field-row">
+              <div class="field">
+                <label for="sr-property">Property name or address <span aria-hidden="true">*</span></label>
+                <input type="text" id="sr-property" name="property" required maxlength="200" data-error="err-sr-property">
+                <div id="err-sr-property" class="error-msg"><span role="img" aria-label="Error">!</span> Identify the property.</div>
+              </div>
+
+              <div class="field">
+                <label for="sr-urgency">Urgency category <span aria-hidden="true">*</span></label>
+                <select id="sr-urgency" name="urgency" required>
+                  <option value="routine">Routine scheduled attention</option>
+                  <option value="priority">Priority business-hours review</option>
+                  <option value="time-sensitive">Time-sensitive issue (call ${escapeHtml(settings.phone_display)} during business hours)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="sr-ref">Job / PO / Reference number (optional)</label>
+              <input type="text" id="sr-ref" name="reference_number" maxlength="80">
+            </div>
+
+            <div class="field">
+              <label for="sr-desc">Service request description <span aria-hidden="true">*</span></label>
+              <textarea id="sr-desc" name="description" required maxlength="3000" data-error="err-sr-desc"></textarea>
+              <div id="err-sr-desc" class="error-msg"><span role="img" aria-label="Error">!</span> Describe the service request.</div>
+            </div>
+
+            <div class="proposal-step__actions proposal-step__actions--end">
+              <button type="submit" class="btn btn--primary btn--lg" id="submit-sr-btn">Send Service Request &rarr;</button>
+            </div>
+          </form>
         </div>
 
-        <div class="field">
-          <label for="sr-company">Company / Management Firm <span aria-hidden="true">*</span></label>
-          <input type="text" id="sr-company" name="company" required maxlength="150" autocomplete="organization" data-error="err-sr-company">
-          <div id="err-sr-company" class="error-msg"><span role="img" aria-label="Error">!</span> Enter your company name.</div>
-        </div>
-
-        <fieldset class="choice-group">
-          <legend>Preferred contact method <span aria-hidden="true">*</span></legend>
-          <div class="choice-row">
-            <input type="radio" id="sr-pref-email" name="preferred_contact_method" value="email" checked>
-            <label for="sr-pref-email">Email</label>
+        <aside class="inquiry-sidebar" aria-label="Operations routing details">
+          <div class="next-steps-card">
+            <span class="eyebrow">Operations Routing</span>
+            <h2 style="font-size:1.35rem;margin-bottom:0.25rem;">Active account support</h2>
+            <ol class="next-steps-list">
+              <li><span class="next-steps-list__num" aria-hidden="true">1</span><div><strong style="color:var(--color-carbon);display:block;">Direct operations queue</strong>Routed with your optional PO or job reference number.</div></li>
+              <li><span class="next-steps-list__num" aria-hidden="true">2</span><div><strong style="color:var(--color-carbon);display:block;">Clear review</strong>Submitting records your request for review and does not claim an approved work order or guaranteed dispatch time.</div></li>
+            </ol>
+            <hr style="border:none;border-top:1px solid var(--border-subtle);margin:1.25rem 0;">
+            <p style="font-size:0.92rem;margin-bottom:0.5rem;">
+              <strong>Direct Office Line:</strong><br>
+              <a href="tel:${escapeHtml(settings.phone_e164)}" data-track="phone_click" style="font-weight:600;">${escapeHtml(settings.phone_display)}</a><br>
+              <span style="font-size:0.84rem;color:var(--color-muted-stone);">${escapeHtml(settings.hours_display)}</span>
+            </p>
+            <p style="font-size:0.86rem;color:var(--color-muted-stone);margin-bottom:0;">
+              New commercial project or property? <a href="/request-proposal/">Request a proposal instead</a>.
+            </p>
           </div>
-          <div class="choice-row">
-            <input type="radio" id="sr-pref-phone" name="preferred_contact_method" value="telephone">
-            <label for="sr-pref-phone">Telephone</label>
-          </div>
-        </fieldset>
-
-        <div class="field">
-          <label for="sr-email">Email address</label>
-          <input type="email" id="sr-email" name="email" autocomplete="email" required data-error="err-sr-email">
-          <div id="err-sr-email" class="error-msg"><span role="img" aria-label="Error">!</span> Enter a valid email address.</div>
-        </div>
-
-        <div class="field">
-          <label for="sr-phone">Telephone</label>
-          <input type="tel" id="sr-phone" name="telephone" autocomplete="tel" data-error="err-sr-phone">
-          <div id="err-sr-phone" class="error-msg"><span role="img" aria-label="Error">!</span> Enter a valid telephone number.</div>
-        </div>
-
-        <div class="field">
-          <label for="sr-property">Property name or address <span aria-hidden="true">*</span></label>
-          <input type="text" id="sr-property" name="property" required maxlength="200" data-error="err-sr-property">
-          <div id="err-sr-property" class="error-msg"><span role="img" aria-label="Error">!</span> Identify the property.</div>
-        </div>
-
-        <div class="field">
-          <label for="sr-urgency">Urgency category <span aria-hidden="true">*</span></label>
-          <select id="sr-urgency" name="urgency" required>
-            <option value="routine">Routine scheduled attention</option>
-            <option value="priority">Priority business-hours review</option>
-            <option value="time-sensitive">Time-sensitive issue (call ${escapeHtml(settings.phone_display)} during business hours)</option>
-          </select>
-        </div>
-
-        <div class="field">
-          <label for="sr-ref">Job / PO / Reference number (optional)</label>
-          <input type="text" id="sr-ref" name="reference_number" maxlength="80">
-        </div>
-
-        <div class="field">
-          <label for="sr-desc">Service request description <span aria-hidden="true">*</span></label>
-          <textarea id="sr-desc" name="description" required maxlength="3000" data-error="err-sr-desc"></textarea>
-          <div id="err-sr-desc" class="error-msg"><span role="img" aria-label="Error">!</span> Describe the service request.</div>
-        </div>
-
-        <button type="submit" class="btn btn--primary" id="submit-sr-btn">Send service request</button>
-      </form>
+        </aside>
+      </div>
     </div>
   </section>`;
 }

@@ -132,25 +132,31 @@
     confirmDialog.showModal();
   }
 
-  // 1. Page Editor Autosave, SEO Character Guides & Unsaved-Change Warning
-  const editorForm = document.getElementById('page-editor-form');
-  const autosaveEl = document.getElementById('autosave-status');
+  // 1. Page Editor Autosave, SEO Character Guides, Unsaved-Change Warning & In-Place Panel Swap
   let isDirty = false;
   let autosaveTimer = null;
+  let beforeUnloadBound = false;
 
-  document.querySelectorAll('[data-char-target]').forEach((inputEl) => {
-    const counterEl = document.getElementById(inputEl.dataset.charTarget);
-    const maxRec = Number(inputEl.dataset.charRec || 0);
-    if (!counterEl) return;
-    const syncCounter = () => {
-      const len = inputEl.value.length;
-      counterEl.textContent = maxRec ? `${len} / ${maxRec} recommended chars` : `${len} chars`;
-    };
-    inputEl.addEventListener('input', syncCounter);
-    syncCounter();
-  });
+  function initPageEditorBindings() {
+    const editorForm = document.getElementById('page-editor-form');
+    const autosaveEl = document.getElementById('autosave-status');
+    isDirty = false;
+    clearTimeout(autosaveTimer);
 
-  if (editorForm) {
+    document.querySelectorAll('[data-char-target]').forEach((inputEl) => {
+      const counterEl = document.getElementById(inputEl.dataset.charTarget);
+      const maxRec = Number(inputEl.dataset.charRec || 0);
+      if (!counterEl) return;
+      const syncCounter = () => {
+        const len = inputEl.value.length;
+        counterEl.textContent = maxRec ? `${len} / ${maxRec} recommended chars` : `${len} chars`;
+      };
+      inputEl.addEventListener('input', syncCounter);
+      syncCounter();
+    });
+
+    if (!editorForm) return;
+
     const saveDraft = async (silent = true) => {
       if (typeof editorForm.reportValidity === 'function' && !silent && !editorForm.reportValidity()) {
         return false;
@@ -202,12 +208,15 @@
       autosaveTimer = setTimeout(() => saveDraft(true), 2500);
     });
 
-    window.addEventListener('beforeunload', (e) => {
-      if (isDirty) {
-        e.preventDefault();
-        e.returnValue = '';
-      }
-    });
+    if (!beforeUnloadBound) {
+      beforeUnloadBound = true;
+      window.addEventListener('beforeunload', (e) => {
+        if (isDirty) {
+          e.preventDefault();
+          e.returnValue = '';
+        }
+      });
+    }
 
     document.getElementById('btn-save-draft')?.addEventListener('click', (e) => {
       lastTriggerEl = e.currentTarget;
@@ -292,6 +301,71 @@
       });
     });
   }
+
+  initPageEditorBindings();
+
+  document.addEventListener('click', async (e) => {
+    const swapLink = e.target.closest('a[data-panel-swap]');
+    if (!swapLink || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const selector = swapLink.dataset.panelSwap;
+    const targetPanel = document.querySelector(selector);
+    if (!targetPanel) return;
+
+    e.preventDefault();
+    const doSwap = async () => {
+      const cleanUrl = swapLink.href.split('#')[0];
+      targetPanel.classList.add('is-loading');
+      targetPanel.setAttribute('aria-busy', 'true');
+      try {
+        const res = await fetch(cleanUrl, { credentials: 'same-origin' });
+        if (!res.ok) {
+          location.href = swapLink.href;
+          return;
+        }
+        const html = await res.text();
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const nextPanel = doc.querySelector(selector);
+        if (!nextPanel) {
+          location.href = swapLink.href;
+          return;
+        }
+        targetPanel.replaceWith(nextPanel);
+        const pageId = swapLink.dataset.pageId;
+        if (pageId) {
+          document.querySelectorAll('[data-page-id].is-selected').forEach((el) => el.classList.remove('is-selected'));
+          document.querySelectorAll(`[data-page-id="${CSS.escape(pageId)}"]`).forEach((el) => {
+            if (el.tagName === 'TR' || el.classList.contains('admin-mobile-card')) {
+              el.classList.add('is-selected');
+            }
+          });
+        }
+        if (window.history && typeof window.history.replaceState === 'function') {
+          window.history.replaceState(null, '', cleanUrl);
+        }
+        initPageEditorBindings();
+        if (window.innerWidth < 1120) {
+          nextPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        announce('Loaded selected page into editor panel');
+      } catch {
+        location.href = swapLink.href;
+      }
+    };
+
+    if (isDirty) {
+      requestConfirmation(
+        {
+          title: 'Discard Unsaved Draft Changes?',
+          message: 'You have unsaved edits in the current page. Switch pages anyway?',
+          confirmLabel: 'Switch Page',
+        },
+        doSwap
+      );
+      return;
+    }
+
+    await doSwap();
+  });
 
   // 2. Native Confirmation Dialog for Media Rights Withdrawal (shows affected placements first!)
   document.addEventListener('click', async (e) => {

@@ -302,15 +302,15 @@ export function renderAdminMfaSetupPage({
               </div>
 
               ${
-                signedInUser
-                  ? `<div class="field">
-                      <label for="mfa-current-totp">Current 6-Digit Authenticator Code (if already enrolled)</label>
-                      <span class="hint">Confirm your current authenticator device before rotating to a new QR code.</span>
-                      <input type="text" id="mfa-current-totp" name="current_totp" inputmode="numeric" pattern="\\d{6}" maxlength="6" autocomplete="one-time-code">
-                    </div>`
-                  : setupToken
-                    ? `<input type="hidden" name="setup_token" value="${escapeHtml(setupToken)}">
-                       <p class="muted" style="font-size:0.86rem;">Authorization mode: <strong>${escapeHtml(tokenPurpose === 'recovery' ? 'Administrator Recovery Token' : 'First-Time Enrollment Token')}</strong></p>`
+                setupToken
+                  ? `<input type="hidden" name="setup_token" value="${escapeHtml(setupToken)}">
+                     <p class="muted" style="font-size:0.86rem;">Authorization mode: <strong>${escapeHtml(tokenPurpose === 'recovery' ? 'Administrator Recovery Token' : 'First-Time Enrollment Token')}</strong></p>`
+                  : signedInUser && signedInUser.mfa_verified === 1
+                    ? `<div class="field">
+                        <label for="mfa-current-totp">Current 6-Digit Authenticator Code (if already enrolled)</label>
+                        <span class="hint">Confirm your current authenticator device before rotating to a new QR code.</span>
+                        <input type="text" id="mfa-current-totp" name="current_totp" inputmode="numeric" pattern="\\d{6}" maxlength="6" autocomplete="one-time-code">
+                      </div>`
                     : `<fieldset class="choice-group">
                         <legend>Authorization Credential (Required)</legend>
                         <div class="field">
@@ -756,8 +756,8 @@ export function renderAdminPagesView({
           </form>
         </section>
 
-        <div class="admin-split">
-          <section class="admin-card">
+        <div class="admin-split admin-split--pages">
+          <section class="admin-card admin-pages-list">
             <div class="admin-card__header">
               <div>
                 <h2>Website Pages</h2>
@@ -769,24 +769,24 @@ export function renderAdminPagesView({
                 ? '<div class="admin-empty-state">No pages match your current search or filter.</div>'
                 : `<div class="admin-desktop-only">
                     <div class="table-scroll" tabindex="0" role="region" aria-label="Website Pages Table">
-                      <table class="data-table" style="font-size:0.85rem;">
+                      <table class="data-table admin-pages-table" style="font-size:0.85rem;">
                         <thead><tr><th scope="col">Route &amp; Title</th><th scope="col">State</th><th scope="col">Action</th></tr></thead>
                         <tbody>
                           ${pages
                             .map(
-                              (p) => `<tr class="${selectedPage?.page_id === p.page_id ? 'is-selected' : ''}">
+                              (p) => `<tr data-page-id="${escapeHtml(p.page_id)}" class="${selectedPage?.page_id === p.page_id ? 'is-selected' : ''}">
                                 <td>
                                   <strong>${escapeHtml(p.slug)}</strong>
                                   <div class="muted" style="font-size:0.78rem;">${escapeHtml(p.title)}</div>
                                   <small class="muted">${escapeHtml(p.owner_name)} &middot; v${escapeHtml(p.current_revision)}</small>
                                 </td>
                                 <td>
-                                  <div class="admin-action-group">
+                                  <div class="admin-page-badges">
                                     <span class="badge">${escapeHtml(p.editorial_state)}</span>
                                     <span class="badge ${p.activation_state === 'Live' ? 'badge--live' : 'badge--warn'}">${escapeHtml(p.activation_state)}</span>
                                   </div>
                                 </td>
-                                <td><a href="/admin/pages?tab=pages&id=${encodeURIComponent(p.page_id)}" class="btn btn--secondary btn--compact">${canEdit ? 'Edit' : 'Inspect'}</a></td>
+                                <td><a href="/admin/pages?tab=pages&id=${encodeURIComponent(p.page_id)}" data-panel-swap="#page-editor-section" data-page-id="${escapeHtml(p.page_id)}" class="btn btn--secondary btn--compact">${canEdit ? 'Edit' : 'Inspect'}</a></td>
                               </tr>`
                             )
                             .join('')}
@@ -797,14 +797,14 @@ export function renderAdminPagesView({
                   <div class="admin-mobile-cards">
                     ${pages
                       .map(
-                        (p) => `<div class="admin-mobile-card${selectedPage?.page_id === p.page_id ? ' is-selected' : ''}">
+                        (p) => `<div data-page-id="${escapeHtml(p.page_id)}" class="admin-mobile-card${selectedPage?.page_id === p.page_id ? ' is-selected' : ''}">
                           <div class="admin-mobile-card__top">
                             <span class="admin-mobile-card__title">${escapeHtml(p.slug)}</span>
                             <span class="badge ${p.activation_state === 'Live' ? 'badge--live' : 'badge--warn'}">${escapeHtml(p.editorial_state)} / ${escapeHtml(p.activation_state)}</span>
                           </div>
                           <div class="admin-mobile-card__meta">${escapeHtml(p.title)}<br>${escapeHtml(p.owner_name)} &middot; v${escapeHtml(p.current_revision)}</div>
                           <div class="admin-mobile-card__actions">
-                            <a href="/admin/pages?tab=pages&id=${encodeURIComponent(p.page_id)}#page-editor-section" class="btn btn--secondary btn--compact">${canEdit ? 'Edit Page' : 'Inspect Page'}</a>
+                            <a href="/admin/pages?tab=pages&id=${encodeURIComponent(p.page_id)}#page-editor-section" data-panel-swap="#page-editor-section" data-page-id="${escapeHtml(p.page_id)}" class="btn btn--secondary btn--compact">${canEdit ? 'Edit Page' : 'Inspect Page'}</a>
                           </div>
                         </div>`
                       )
@@ -980,7 +980,7 @@ export function renderAdminPagesView({
                     </details>
                   </section>`;
                 })()
-              : '<section class="admin-card"><div class="admin-empty-state">Select a page to edit copy, inspect SEO fields, or compare revisions.</div></section>'
+              : '<section id="page-editor-section" class="admin-card"><div class="admin-empty-state">Select a page to edit copy, inspect SEO fields, or compare revisions.</div></section>'
           }
         </div>`
       : ''

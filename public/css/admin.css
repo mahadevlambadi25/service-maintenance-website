@@ -915,3 +915,42 @@ dialog::backdrop {
   border-left-color: var(--color-error);
   color: var(--color-error);
 }
+
+/* Pages & Content Inspect/Edit Workspace */
+.admin-pages-table th:first-child,
+.admin-pages-table td:first-child {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.admin-pages-table th:last-child,
+.admin-pages-table td:last-child {
+  white-space: nowrap;
+  text-align: right;
+  width: 1%;
+}
+
+.admin-page-badges {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+#page-editor-section.is-loading {
+  opacity: 0.6;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+@media (min-width: 1120px) {
+  .admin-split--pages {
+    grid-template-columns: minmax(380px, 0.92fr) minmax(0, 1.38fr);
+  }
+  .admin-pages-list {
+    position: sticky;
+    top: 1rem;
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+  }
+}

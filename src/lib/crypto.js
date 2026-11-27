@@ -94,8 +94,8 @@ export function generateTotpCode(secret, timeMs = Date.now(), stepSeconds = 30) 
   return String(code % 1_000_000).padStart(6, '0');
 }
 
-export function verifyTotpCode(secret, token, timeMs = Date.now(), windowSteps = 1) {
-  const clean = String(token || '').trim();
+export function verifyTotpCode(secret, token, timeMs = Date.now(), windowSteps = 2) {
+  const clean = String(token || '').replace(/[\s-]+/g, '').trim();
   if (!/^\d{6}$/.test(clean)) return false;
   for (let offset = -windowSteps; offset <= windowSteps; offset++) {
     const expected = generateTotpCode(secret, timeMs + offset * 30_000);

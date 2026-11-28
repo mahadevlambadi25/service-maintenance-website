@@ -2554,7 +2554,19 @@ export function renderAdminJobsView({
   const canExport = hasPermission(user, PERMISSIONS.EXPORT_APPLICATIONS);
   const pendingCount = totalScopedAppsCount;
 
+  const openJobsCount = jobs.filter((j) => j.status === 'Open').length;
+  const draftJobsCount = jobs.filter((j) => j.status === 'Draft' || j.status === 'Scheduled').length;
+  const pausedJobsCount = jobs.filter((j) => j.status === 'Paused').length;
+
   return `
+  <!-- Hiring Workspace Header & KPI Strip -->
+  ${renderAdminKpiStrip([
+    { value: jobs.length, label: 'Total Openings', hint: `${openJobsCount} live on website` },
+    { value: openJobsCount, label: 'Accepting Applications', hint: 'Live public requisitions', accent: true },
+    { value: pendingCount, label: 'Candidate Inbox', hint: 'Scoped to your review role' },
+    { value: isOwner ? 'Hiring Owner' : 'Hiring Reviewer', label: 'Your Scope', hint: isOwner ? 'Full vacancy & export rights' : 'Review & stage assignment' },
+  ])}
+
   <nav class="admin-tabs" aria-label="Careers workspace" style="margin-bottom:1.25rem;">
     <a href="/admin/jobs?tab=vacancies" class="admin-tab${tab === 'vacancies' ? ' is-active' : ''}">Job Openings (${jobs.length})</a>
     <a href="/admin/jobs?tab=applications" class="admin-tab${tab === 'applications' ? ' is-active' : ''}">Applicant Inbox${pendingCount > 0 ? ` <span class="badge badge--warn">${pendingCount}</span>` : ''}</a>
@@ -2564,8 +2576,8 @@ export function renderAdminJobsView({
   <section class="admin-card">
     <div class="admin-card__header">
       <div>
-        <h2>Job Openings</h2>
-        <p class="muted" style="margin:0;font-size:0.85rem;">Opening schedules run in <strong>America/Phoenix</strong> time. Requisition IDs and cycle references are read-only.</p>
+        <h2>Job Openings &amp; Requisitions</h2>
+        <p class="muted" style="margin:0;font-size:0.85rem;">Opening schedules run in <strong>America/Phoenix</strong> time. Requisition IDs and cycle references are read-only and immutable.</p>
       </div>
       ${canExport
         ? `<a href="/admin/api/applications/export.csv" class="btn btn--secondary">Export Applicant List (CSV)</a>`
@@ -2584,7 +2596,7 @@ export function renderAdminJobsView({
                   <td><code>${escapeHtml(j.requisition_id)}</code><br><small class="muted">${escapeHtml(j.opening_cycle_id)}</small></td>
                   <td><strong>${escapeHtml(j.title)}</strong>${j.is_private_test ? ' <span class="badge badge--warn">PRIVATE TEST</span>' : ''}</td>
                   <td>
-                    <span class="badge ${j.status === 'Open' ? 'badge--live' : 'badge--warn'}">${escapeHtml(j.status)}</span>
+                    <span class="badge ${j.status === 'Open' ? 'badge--live' : j.status === 'Paused' ? 'badge--warn' : 'badge--info'}">${escapeHtml(j.status)}</span>
                     ${j.publish_at ? `<br><small class="muted">Publish: ${escapeHtml(formatPhoenixDateTime(j.publish_at, false))}</small>` : ''}
                     ${j.close_at ? `<br><small class="muted">Close: ${escapeHtml(formatPhoenixDateTime(j.close_at, false))}</small>` : ''}
                   </td>
@@ -2618,7 +2630,7 @@ export function renderAdminJobsView({
       ${jobs
         .map(
           (j) => `<div class="admin-mobile-card">
-            <div class="admin-mobile-card__top"><span class="admin-mobile-card__title">${escapeHtml(j.title)}</span><span class="badge ${j.status === 'Open' ? 'badge--live' : 'badge--warn'}">${escapeHtml(j.status)}</span></div>
+            <div class="admin-mobile-card__top"><span class="admin-mobile-card__title">${escapeHtml(j.title)}</span><span class="badge ${j.status === 'Open' ? 'badge--live' : j.status === 'Paused' ? 'badge--warn' : 'badge--info'}">${escapeHtml(j.status)}</span></div>
             <div class="admin-mobile-card__meta"><code>${escapeHtml(j.requisition_id)}</code> &middot; ${escapeHtml(j.work_area)}</div>
             <div class="admin-mobile-card__actions">
               ${isOwner ? `<a href="/admin/jobs?job=${encodeURIComponent(j.requisition_id)}#job-editor-box" class="btn btn--secondary btn--compact">Edit / Schedule</a>` : ''}

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ENV, ROOT_DIR } from '../config.js';
-import { escapeHtml } from '../lib/sanitize.js';
+import { escapeHtml, formatPublicAddress } from '../lib/sanitize.js';
 
 function computeAssetVersion() {
   try {
@@ -76,10 +76,19 @@ export function renderPublicLayout({
 
   const navItems = [
     { href: '/services/', label: 'Services' },
-    { href: '/properties/', label: 'Properties We Serve' },
+    { href: '/properties/', label: 'Properties' },
     { href: '/projects/', label: 'Projects' },
     { href: '/about/', label: 'About' },
     { href: '/credentials/', label: 'Credentials' },
+    {
+      href: '/careers/',
+      label: 'Careers',
+      children: [
+        { href: '/careers/', label: 'Careers Overview' },
+        { href: '/careers/#openings', label: 'Current Job Openings' },
+        { href: '/careers/#apply', label: 'Application Process' },
+      ],
+    },
   ];
   if (hasPublishedInsights) {
     navItems.push({ href: '/insights/', label: 'Insights' });
@@ -144,22 +153,10 @@ export function renderPublicLayout({
       : ''
   }
 
-  <div class="utility-bar">
-    <div class="container utility-bar__inner">
-      <span class="utility-bar__loc">Greater Phoenix, AZ <span class="utility-bar__hours">&middot; ${escapeHtml(settings.hours_display)}</span></span>
-      <div class="utility-bar__links">
-        <a href="/request-service/" class="utility-bar__extra">Existing Customer Service</a>
-        <a href="/careers/" class="utility-bar__extra">Careers</a>
-        <a href="/contact/" class="utility-bar__extra">Contact</a>
-        <a href="tel:${escapeHtml(settings.phone_e164)}" data-track="phone_click" class="utility-bar__phone">${escapeHtml(settings.phone_display)}</a>
-      </div>
-    </div>
-  </div>
-
   <header class="site-header">
     <div class="container site-header__inner">
       <a href="/" class="brand-lockup">
-        <img src="/assets/brand-mark.svg" alt="" width="40" height="40" aria-hidden="true">
+        <img src="/assets/brand-mark.svg" alt="" width="38" height="38" aria-hidden="true">
         <span class="brand-lockup__text">
           <span class="brand-lockup__name">${escapeHtml(settings.trading_name)}</span>
           <span class="brand-lockup__sub">Commercial Property Care</span>
@@ -173,20 +170,78 @@ export function renderPublicLayout({
       <nav id="primary-navigation" class="primary-nav" aria-label="Primary">
         <ul class="primary-nav__list">
           ${navItems
-            .map(
-              (item) =>
-                `<li><a href="${escapeHtml(item.href)}" class="primary-nav__link"${
-                  currentPath === item.href ? ' aria-current="page"' : ''
-                }>${escapeHtml(item.label)}</a></li>`
-            )
+            .map((item) => {
+              const isCurrent = currentPath === item.href || (item.children && item.children.some((c) => currentPath === c.href));
+              if (item.children && item.children.length > 0) {
+                return `<li class="nav-item-dropdown">
+                  <a href="${escapeHtml(item.href)}" class="primary-nav__link primary-nav__link--has-dropdown"${
+                    isCurrent ? ' aria-current="page"' : ''
+                  }>
+                    ${escapeHtml(item.label)}
+                    <svg class="dropdown-icon" width="12" height="12" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                      <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                    </svg>
+                  </a>
+                  <ul class="nav-dropdown-menu" aria-label="${escapeHtml(item.label)} Submenu">
+                    ${item.children
+                      .map(
+                        (sub) => `<li><a href="${escapeHtml(sub.href)}" class="nav-dropdown-item"${
+                          currentPath === sub.href ? ' aria-current="page"' : ''
+                        }>${escapeHtml(sub.label)}</a></li>`
+                      )
+                      .join('')}
+                  </ul>
+                </li>`;
+              }
+              return `<li><a href="${escapeHtml(item.href)}" class="primary-nav__link"${
+                isCurrent ? ' aria-current="page"' : ''
+              }>${escapeHtml(item.label)}</a></li>`;
+            })
             .join('')}
+          <li class="mobile-only-nav mobile-nav-divider" aria-hidden="true"></li>
           <li class="mobile-only-nav"><a href="/request-service/" class="primary-nav__link">Existing Customer Service</a></li>
-          <li class="mobile-only-nav"><a href="/careers/" class="primary-nav__link">Careers</a></li>
-          <li class="mobile-only-nav"><a href="/contact/" class="primary-nav__link">Contact</a></li>
+          <li class="mobile-only-nav"><a href="/contact/" class="primary-nav__link">Contact Us</a></li>
+          <li class="mobile-only-nav mobile-nav-hours">
+            <span>Greater Phoenix, AZ</span>
+            <span class="muted">${escapeHtml(settings.hours_display)}</span>
+          </li>
+          <li class="mobile-only-nav mobile-nav-action">
+            <a href="/request-proposal/" class="btn btn--primary" style="width:100%;justify-content:center;">Request a Proposal</a>
+          </li>
         </ul>
       </nav>
 
-      <a href="/request-proposal/" class="btn btn--primary header-cta">Request a proposal</a>
+      <div class="site-header__actions">
+        <!-- Direct Location & Operating Hours Indicator -->
+        <details class="header-info-dropdown" id="header-info-menu">
+          <summary class="header-info-trigger" aria-label="Location, hours, and direct support links">
+            <span class="header-info-pill">Phoenix, AZ</span>
+            <svg class="dropdown-icon" width="12" height="12" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
+            </svg>
+          </summary>
+          <div class="header-info-popover">
+            <div class="header-info-item">
+              <strong>Coverage Area:</strong> Greater Phoenix, AZ
+            </div>
+            <div class="header-info-item">
+              <strong>Operating Hours:</strong> ${escapeHtml(settings.hours_display)}
+            </div>
+            <hr class="header-info-divider">
+            <ul class="header-info-links">
+              <li><a href="/request-service/">Existing Customer Service &rarr;</a></li>
+              <li><a href="/contact/">Direct Contact &amp; Licensing &rarr;</a></li>
+            </ul>
+          </div>
+        </details>
+
+        <a href="tel:${escapeHtml(settings.phone_e164)}" data-track="phone_click" class="header-phone">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+          </svg>
+          <span>${escapeHtml(settings.phone_display)}</span>
+        </a>
+      </div>
     </div>
   </header>
 
@@ -260,7 +315,7 @@ export function renderPublicLayout({
           <ul class="footer-links">
             <li><a href="tel:${escapeHtml(settings.phone_e164)}" data-track="phone_click">${escapeHtml(settings.phone_display)}</a></li>
             <li><a href="mailto:${escapeHtml(settings.monitored_inbox)}" data-track="email_click">${escapeHtml(settings.monitored_inbox)}</a></li>
-            <li>${escapeHtml(settings.address_display)}</li>
+            <li>${escapeHtml(formatPublicAddress(settings.address_display))}</li>
             <li>${escapeHtml(settings.hours_display)}</li>
             <li><a href="/request-proposal/">Request a Proposal</a></li>
             <li><a href="/request-service/">Existing Customer Service</a></li>

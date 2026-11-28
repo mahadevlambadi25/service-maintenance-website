@@ -1,4 +1,15 @@
 /**
+ * Strips internal editorial verification parentheticals (e.g. "(Confirm full ZIP...)")
+ * from customer-facing address display while preserving raw value for internal admin tasks.
+ */
+export function formatPublicAddress(address = '') {
+  if (!address) return '';
+  return String(address)
+    .replace(/\s*\([^)]*confirm[^)]*\)/gi, '')
+    .trim();
+}
+
+/**
  * HTML escaping, rich-text allowlist sanitization, URL protocol checks,
  * and MITRE CWE-1236 spreadsheet formula-injection neutralization.
  */

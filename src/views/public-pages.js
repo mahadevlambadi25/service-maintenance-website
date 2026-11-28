@@ -1,5 +1,5 @@
 import { SERVICE_FAMILIES, PRIVACY_NOTICE_VERSION } from '../config.js';
-import { escapeHtml, sanitizeRichHtml } from '../lib/sanitize.js';
+import { escapeHtml, sanitizeRichHtml, formatPublicAddress } from '../lib/sanitize.js';
 import { renderBeforeAfterPair, renderBreadcrumbs, renderFaqAccordion, renderResponsivePicture, renderSeasonalFeatureSlot } from './components.js';
 
 export function renderHomePage({ rev, settings, approvedProjects, seasonalFeature, buildingEngineerLive }) {
@@ -593,6 +593,227 @@ export function renderServiceDetailPage({ page, rev, contextualCampaign, related
   </section>`;
 }
 
+export function renderPropertiesOverviewPage({ page, rev, settings }) {
+  const propertyCategories = [
+    {
+      slug: '/properties/industrial-warehouses/',
+      title: 'Industrial & Warehouse Facilities',
+      badge: 'Distribution & Logistics',
+      image: '/assets/prop-industrial.jpg',
+      alt: 'Greater Phoenix industrial and logistics warehouse exterior',
+      icon: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 20h20"/><path d="M4 20V9l8-4 8 4v11"/></svg>`,
+      description: 'Scheduled maintenance, dock repairs, and facility upkeep built around dock logistics, forklift traffic lanes, and high-bay distribution schedules.',
+      scopes: [
+        'Active-bay scrim & ceiling insulation repairs scheduled around forklift lanes',
+        'Loading dock concrete spalls, bollards, man-doors & yard gate repairs',
+        'Industrial office build-outs, restroom upgrades & lease-end white-shell restoration',
+      ],
+      linkText: 'Explore Industrial Facilities',
+    },
+    {
+      slug: '/properties/retail-centers/',
+      title: 'Retail Shopping Centers',
+      badge: 'Customer-Facing Commercial',
+      image: '/assets/prop-retail.jpg',
+      alt: 'Southwest commercial retail shopping center exterior',
+      icon: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 9l2-5h14l2 5"/><path d="M5 9v11h14V9"/></svg>`,
+      description: 'Preserving curb appeal, clean walkways, and customer safety during shopping hours while coordinating exterior repairs and rapid vacant suite turnovers between retail leases.',
+      scopes: [
+        'Daytime porter routes: parking fields, common-area patios & receptacle policing',
+        'Exterior walkway pressure washing, canopy/stucco patching & lighting upkeep',
+        'Inline suite turnover make-ready, demo, drywall & final tenant cleaning',
+      ],
+      linkText: 'Explore Retail Centers',
+    },
+    {
+      slug: '/properties/commercial-offices/',
+      title: 'Commercial Offices & Suites',
+      badge: 'Occupied Business Parks',
+      image: '/assets/prop-office.jpg',
+      alt: 'Greater Phoenix commercial office building exterior',
+      icon: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="2" width="16" height="20" rx="1"/><path d="M9 6h2"/><path d="M13 6h2"/><path d="M9 10h2"/><path d="M13 10h2"/></svg>`,
+      description: 'Quiet, scheduled care designed for occupied commercial office buildings—protecting shared lobbies and corridors while scheduling high-impact repairs and renovations around tenant business hours.',
+      scopes: [
+        'Common-area & corridor upkeep: doors/closers, suite signage, ceiling tiles & wall paint',
+        'Suite renovations: partition additions, conference room build-outs & flooring coordination',
+        'Move-out turnarounds: selective demo, repair punch lists & detailed turnover cleaning',
+      ],
+      linkText: 'Explore Commercial Offices',
+    },
+    {
+      slug: '/property-managers/',
+      title: 'Property Management Portfolios',
+      badge: 'Multi-Site Operations',
+      image: '/assets/prop-portfolio.jpg',
+      alt: 'Multi-tenant commercial business park in Greater Phoenix',
+      icon: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>`,
+      description: 'A single accountable service partner for commercial property and asset managers overseeing multiple Greater Phoenix properties—from daily porters to multi-trade turnovers.',
+      scopes: [
+        'Multi-property inquiry routing: submit multiple sites, contacts, and scopes in one request',
+        'Direct continuity: issues identified during routine visits transition into repair work orders',
+        'Procurement-ready documentation: verified ROC licenses (334982, 340441, 349261) & insurance',
+      ],
+      linkText: 'Explore Portfolio Solutions',
+    },
+  ];
+
+  const propertyFaqs = [
+    {
+      q: 'Do you require a minimum project size or square footage to service a property?',
+      a: 'No minimum project size is required. We evaluate single building maintenance work orders, multi-item repair punch lists, recurring day porter routes, and full suite tenant improvement projects.',
+    },
+    {
+      q: 'Which maintenance tasks are self-performed vs. coordinated with specialty trades?',
+      a: 'Core day porter services, routine commercial maintenance, drywall repairs, make-ready turnover demo, and final cleaning are self-performed by our in-house personnel. Licensed specialty trades (such as major roofing, mechanical, electrical, or plumbing) are transparently coordinated when required by code or scope.',
+    },
+    {
+      q: 'Can out-of-state property owners or asset managers request service for Phoenix assets?',
+      a: 'Yes. Eligibility is based on where the commercial property is physically located (Greater Phoenix). We work directly with out-of-state asset managers, institutional owners, and local property management teams.',
+    },
+    {
+      q: 'How does Service Maintenance coordinate work in active, tenant-occupied buildings?',
+      a: 'Every scope is planned around tenant operating hours, dock logistics, and noise restrictions. Noisy demolition or high-traffic corridor repairs are coordinated after hours or during agreed maintenance windows.',
+    },
+  ];
+
+  return `
+  <section class="section">
+    <div class="container">
+      ${renderBreadcrumbs([
+        { label: 'Home', href: '/' },
+        { label: 'Properties We Serve', href: '/properties/' },
+      ])}
+
+      <div class="properties-hero">
+        <span class="eyebrow">Operating Environments · Greater Phoenix</span>
+        <h1>${escapeHtml(rev.hero_headline || 'Services tailored to how your commercial property operates')}</h1>
+        <p class="section-header__lead">
+          ${escapeHtml(rev.hero_summary || 'Primary experience across industrial and warehouse facilities, retail centers, commercial office buildings, and managed property portfolios.')}
+        </p>
+        <p style="color:var(--color-muted-stone);font-size:1.02rem;max-width:70ch;margin-top:0.75rem;line-height:1.6;">
+          Different commercial properties carry different risks, dock schedules, foot traffic patterns, and tenant expectations. Explore how we structure scopes for industrial facilities, retail centers, multi-tenant offices, and multi-site portfolios across Greater Phoenix.
+        </p>
+        <div class="hero__actions" style="margin-top:1.5rem;">
+          <a href="/request-proposal/" class="btn btn--primary">Request a Proposal</a>
+          <a href="/projects/" class="btn btn--secondary">View Completed Case Studies &rarr;</a>
+        </div>
+      </div>
+
+      <!-- 4 Responsive Category Cards -->
+      <div class="properties-grid" aria-label="Commercial Property Types">
+        ${propertyCategories
+          .map(
+            (cat) => `
+          <article class="prop-card-pro">
+            <div class="prop-card-pro__media">
+              <img src="${escapeHtml(cat.image)}" alt="${escapeHtml(cat.alt)}" class="prop-card-pro__img" width="600" height="338" loading="lazy">
+              <span class="prop-card-pro__badge">${escapeHtml(cat.badge)}</span>
+            </div>
+            <div class="prop-card-pro__body">
+              <div class="prop-card-pro__header">
+                ${cat.icon}
+                <h2 class="prop-card-pro__title">
+                  <a href="${escapeHtml(cat.slug)}">${escapeHtml(cat.title)}</a>
+                </h2>
+              </div>
+              <p class="prop-card-pro__desc">${escapeHtml(cat.description)}</p>
+
+              <h3 class="prop-card-pro__scopes-title">Primary Work &amp; Capabilities</h3>
+              <ul class="prop-card-pro__scopes">
+                ${cat.scopes
+                  .map(
+                    (s) => `
+                  <li class="prop-card-pro__scope-item">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>${escapeHtml(s)}</span>
+                  </li>`
+                  )
+                  .join('')}
+              </ul>
+
+              <div class="prop-card-pro__footer">
+                <a href="${escapeHtml(cat.slug)}" class="prop-card-pro__link">
+                  ${escapeHtml(cat.linkText)} &rarr;
+                </a>
+              </div>
+            </div>
+          </article>`
+          )
+          .join('')}
+      </div>
+
+      <!-- Operational Principles for Active Commercial Properties -->
+      <section class="prop-ops-section" aria-labelledby="prop-ops-title">
+        <div class="prop-ops-header">
+          <span class="eyebrow">Execution Standards</span>
+          <h2 id="prop-ops-title" style="margin-top:0.35rem;">How We Protect Active Commercial Facilities</h2>
+          <p class="muted" style="margin-top:0.5rem;font-size:0.95rem;">Every commercial property has active users, deliveries, and business hours. We structure every scope around site realities rather than standard residential assumptions.</p>
+        </div>
+        <div class="prop-ops-grid">
+          <div class="prop-ops-card">
+            <h3>Active-Facility Scheduling</h3>
+            <p>Noisy work, heavy corridor staging, and floor work are scheduled around tenant meetings, retail customer peaks, and distribution dock windows.</p>
+          </div>
+          <div class="prop-ops-card">
+            <h3>In-House Team + Specialty Trades</h3>
+            <p>Core day porters, commercial maintenance, and TI make-ready are executed by our in-house personnel, with licensed specialty trades coordinated when required.</p>
+          </div>
+          <div class="prop-ops-card">
+            <h3>Documented Digital Proof</h3>
+            <p>Before &amp; After photo logs, clear scope approvals, and itemized billing provide transparency for commercial property managers and remote asset owners.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Multi-Property Callout Banner -->
+      <section class="prop-multi-banner" aria-labelledby="multi-prop-title">
+        <div class="prop-multi-banner__content">
+          <span class="prop-multi-banner__eyebrow">Portfolio Coordination</span>
+          <h2 id="multi-prop-title" class="prop-multi-banner__title">Managing multiple commercial properties across Greater Phoenix?</h2>
+          <p class="prop-multi-banner__desc">Submit a single inquiry covering multiple addresses, property types, and service needs. We coordinate recurring day porters, repair lists, and tenant turnover projects across your entire portfolio under one accountable relationship.</p>
+        </div>
+        <div class="prop-multi-banner__actions">
+          <a href="/request-proposal/?multiple=true" class="btn btn--primary">Multi-Property Proposal</a>
+          <a href="/property-managers/" class="btn btn--ghost-light">Portfolio Solutions &rarr;</a>
+        </div>
+      </section>
+
+      <!-- Verified Case Studies Proof Strip -->
+      <div class="panel panel--light" style="margin-bottom:3.5rem;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1.25rem;">
+        <div>
+          <span class="eyebrow" style="margin-bottom:0.25rem;">Verified Work</span>
+          <h2 style="margin:0.25rem 0 0.35rem;font-size:1.3rem;">See Completed Projects by Property Type</h2>
+          <p class="muted" style="margin:0;font-size:0.92rem;">Filter real case studies with Before &amp; After photo documentation across industrial, retail, and office properties.</p>
+        </div>
+        <div style="display:flex;gap:0.75rem;flex-wrap:wrap;">
+          <a href="/projects/?property=Industrial+%2F+Warehouse" class="btn btn--secondary btn--compact">Industrial Work</a>
+          <a href="/projects/?property=Commercial+Office" class="btn btn--secondary btn--compact">Office Work</a>
+          <a href="/projects/" class="btn btn--primary btn--compact">Browse All Projects &rarr;</a>
+        </div>
+      </div>
+
+      <!-- FAQ Section -->
+      <div style="margin-bottom:3.5rem;">
+        <div class="section-header" style="margin-bottom:1.75rem;">
+          <span class="eyebrow">Commercial Property FAQs</span>
+          <h2>Frequently asked questions about property service</h2>
+        </div>
+        ${renderFaqAccordion(propertyFaqs)}
+      </div>
+
+      <!-- Final Proposal Banner -->
+      <div class="cta-banner" style="margin-top:2rem;">
+        <h2>Ready to discuss your commercial property needs?</h2>
+        <p>Tell us about your property location, building type, and maintenance priorities. We provide clear, itemized proposals without unverified sales promises.</p>
+        <div class="hero__actions" style="justify-content:center;margin-top:1.5rem;">
+          <a href="/request-proposal/" class="btn btn--primary">Request a Proposal</a>
+          <a href="tel:${escapeHtml(settings.phone_e164)}" class="btn btn--secondary" data-track="phone_click">Call ${escapeHtml(settings.phone_display)}</a>
+        </div>
+      </div>
+    </div>
+  </section>`;
+}
+
 export function renderPropertyPage({ page, rev }) {
   let scopes = [];
   try { scopes = JSON.parse(rev.scopes_json || '[]'); } catch { scopes = []; }
@@ -938,7 +1159,7 @@ export function renderServiceAreaPage({ settings }) {
         <ul style="columns:2;max-width:34rem;">
           ${cities.map((c) => `<li>${escapeHtml(c)}, AZ</li>`).join('')}
         </ul>
-        <p class="muted" style="font-size:0.9rem;margin-bottom:0;">Service Maintenance operates from our Tempe base (${escapeHtml(settings.address_display)}) and does not operate fake branch offices in surrounding cities.</p>
+        <p class="muted" style="font-size:0.9rem;margin-bottom:0;">Service Maintenance operates from our Tempe base (${escapeHtml(formatPublicAddress(settings.address_display))}) and does not operate fake branch offices in surrounding cities.</p>
       </div>
       <div class="hero__actions">
         <a href="/request-proposal/" class="btn btn--primary">Confirm coverage for your property</a>
@@ -975,7 +1196,7 @@ export function renderContactPage({ settings }) {
         <h2>Office Details (${escapeHtml(settings.timezone)})</h2>
         <p><strong>Telephone:</strong> <a href="tel:${escapeHtml(settings.phone_e164)}" data-track="phone_click">${escapeHtml(settings.phone_display)}</a><br>
         <strong>Hours:</strong> ${escapeHtml(settings.hours_display)}<br>
-        <strong>Address Reference:</strong> ${escapeHtml(settings.address_display)}<br>
+        <strong>Address Reference:</strong> ${escapeHtml(formatPublicAddress(settings.address_display))}<br>
         <strong>Legal Entity:</strong> ${escapeHtml(settings.legal_entity)} (${escapeHtml(settings.roc_numbers)})</p>
       </div>
     </div>
@@ -1499,38 +1720,236 @@ export function renderThankYouPage({ receiptId = '', kind = 'new_business', sett
 }
 
 export function renderCareersOverviewPage({ openJobs, settings }) {
+  const careersFaqs = [
+    {
+      q: 'Where are Service Maintenance jobs located?',
+      a: 'All positions operate throughout the Greater Phoenix commercial metropolitan area, including Phoenix, Scottsdale, Tempe, Mesa, Chandler, Gilbert, Glendale, and Peoria. Specific work areas or route clusters are detailed in each opening.',
+    },
+    {
+      q: 'Do you hire independent 1099 contractors or direct W2 employees?',
+      a: 'We hire W2 employees for core field roles, including commercial day porters and maintenance technicians. We provide direct compensation, standard payroll withholding, and worker protections.',
+    },
+    {
+      q: 'How long does the hiring and application review take?',
+      a: 'Our hiring team reviews applications during standard Arizona business hours (Monday–Friday, 7 AM–5 PM). Qualified candidates typically receive an initial phone review or interview scheduling within 2 to 3 business days.',
+    },
+    {
+      q: 'What if I do not have a digital resume ready?',
+      a: 'For field and porter positions where resumes are optional, you can summarize your relevant experience directly in the online application form without attaching a file.',
+    },
+  ];
+
   return `
-  <section class="section">
+  <section class="section" id="careers-top">
     <div class="container">
       ${renderBreadcrumbs([{ label: 'Home', href: '/' }, { label: 'Careers', href: '/careers/' }])}
-      <span class="eyebrow">Working at Service Maintenance</span>
-      <h1>Careers &amp; current openings</h1>
-      <p style="font-size:1.1rem;color:var(--color-muted-stone);">Service Maintenance supports commercial properties across Greater Phoenix through in-house day porters, maintenance technicians, supervisors, and project managers.</p>
+      
+      <!-- Careers Hero Header -->
+      <div class="careers-hero-card">
+        <div class="careers-hero-card__content">
+          <span class="eyebrow">Build Your Career in Commercial Care</span>
+          <h1>Commercial property maintenance careers in Greater Phoenix</h1>
+          <p class="section-header__lead">
+            Join a dependable Arizona commercial services company with roots tracing back to 1989. We maintain long-term commercial office, industrial, and retail accounts with consistent schedules, supportive field supervision, and clear operational standards.
+          </p>
+          <div class="careers-hero-card__actions">
+            <a href="#openings" class="btn btn--primary">View Open Positions (${openJobs.length})</a>
+            <a href="#apply" class="btn btn--secondary">Our Hiring Process</a>
+          </div>
+        </div>
+        <div class="careers-hero-card__stats">
+          <div class="careers-stat-pill">
+            <strong>1989</strong>
+            <span>Company Roots</span>
+          </div>
+          <div class="careers-stat-pill">
+            <strong>W2</strong>
+            <span>Direct Employment</span>
+          </div>
+          <div class="careers-stat-pill">
+            <strong>Phoenix Metro</strong>
+            <span>Local Commercial Routes</span>
+          </div>
+        </div>
+      </div>
 
-      ${
-        openJobs.length === 0
-          ? `<div class="panel" style="margin-top:2rem;">
-              <h2>No current open positions</h2>
-              <p>There are no open positions accepting applications on the website today. We do not keep invented postings open or collect unsolicited resumes on closed cycles.</p>
-              <p style="margin-bottom:0;">For general employment inquiries, contact our recruiting team at <a href="mailto:${escapeHtml(settings.recruiting_contact)}">${escapeHtml(settings.recruiting_contact)}</a> or call <a href="tel:${escapeHtml(settings.phone_e164)}">${escapeHtml(settings.phone_display)}</a>.</p>
-            </div>`
-          : `<div class="grid-2" style="margin-top:2rem;">
-              ${openJobs
-                .map(
-                  (j) => `<article class="panel">
-                    <span class="eyebrow">${escapeHtml(j.employment_type)} &middot; ${escapeHtml(j.role_family)}</span>
-                    <h2><a href="/careers/${escapeHtml(j.slug)}/">${escapeHtml(j.title)}</a></h2>
-                    <p><strong>Work Area:</strong> ${escapeHtml(j.work_area)}<br>
-                    <strong>Schedule:</strong> ${escapeHtml(j.schedule_text)}</p>
-                    <div class="hero__actions">
-                      <a href="/careers/${escapeHtml(j.slug)}/" class="btn btn--secondary">View role</a>
-                      <a href="/careers/${escapeHtml(j.slug)}/apply/" class="btn btn--primary">Apply now</a>
-                    </div>
-                  </article>`
-                )
-                .join('')}
-            </div>`
-      }
+      <!-- Why Work at Service Maintenance -->
+      <div class="careers-pillars-section" aria-labelledby="careers-why-heading">
+        <div class="section-header" style="max-width:54rem;">
+          <span class="eyebrow">Workplace Principles</span>
+          <h2 id="careers-why-heading">Why commercial technicians &amp; porters choose Service Maintenance</h2>
+          <p class="section-header__lead">We believe commercial property service is skilled craft work that deserves dignity, clear expectations, and reliable operational support.</p>
+        </div>
+
+        <div class="careers-pillars-grid">
+          <div class="careers-pillar-card">
+            <div class="careers-pillar-icon" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+                <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+              </svg>
+            </div>
+            <h3>Stable Commercial Accounts</h3>
+            <p>We work exclusively with contracted commercial office parks, industrial complexes, and retail centers. No residential house cleaning or unpredictable gig-economy assignments.</p>
+          </div>
+
+          <div class="careers-pillar-card">
+            <div class="careers-pillar-icon" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+            </div>
+            <h3>Consistent Daytime Schedules</h3>
+            <p>Our standard property service windows run during business hours (typically Monday–Friday, 7 AM–5 PM). Predictable recurring routes allow you to balance work and personal life.</p>
+          </div>
+
+          <div class="careers-pillar-card">
+            <div class="careers-pillar-icon" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="9" cy="7" r="4"></circle>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+              </svg>
+            </div>
+            <h3>Responsive Field Supervision</h3>
+            <p>You have direct communication with operations managers and estimating leads who know the properties. When supplies or client guidance are needed, leadership is a phone call away.</p>
+          </div>
+
+          <div class="careers-pillar-card">
+            <div class="careers-pillar-icon" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              </svg>
+            </div>
+            <h3>Proper Equipment &amp; Safety</h3>
+            <p>We supply commercial-grade tools, PPE, standardized uniform shirts, and clear OSHA-compliant job site safety guidelines for every technician and porter.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Current Job Openings Anchor Section -->
+      <section id="openings" class="careers-openings-section" aria-labelledby="openings-heading">
+        <div class="section-header" style="max-width:54rem;">
+          <span class="eyebrow">Available Opportunities</span>
+          <h2 id="openings-heading">Current commercial job openings</h2>
+          <p class="section-header__lead">
+            Review live requisitions below. Each posting details the role family, schedule, pay band, and qualifications.
+          </p>
+        </div>
+
+        ${
+          openJobs.length === 0
+            ? `<div class="careers-empty-card" role="status">
+                <div class="careers-empty-icon" aria-hidden="true">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                  </svg>
+                </div>
+                <h3>No current open positions</h3>
+                <p>There are no active openings accepting online applications right now. As an ethical Arizona employer, we publish only genuine, funded requisitions and never harvest unsolicited resumes for phantom positions.</p>
+                <div class="careers-empty-footer">
+                  <p>Interested in future opportunities across Greater Phoenix? Contact our recruiting team directly:</p>
+                  <div class="hero__actions" style="justify-content:center;margin-top:0.75rem;">
+                    <a href="mailto:${escapeHtml(settings.recruiting_contact)}" class="btn btn--secondary">Email ${escapeHtml(settings.recruiting_contact)}</a>
+                    <a href="tel:${escapeHtml(settings.phone_e164)}" class="btn btn--ghost-light">Call ${escapeHtml(settings.phone_display)}</a>
+                  </div>
+                </div>
+              </div>`
+            : `<div class="careers-openings-grid">
+                ${openJobs
+                  .map(
+                    (j) => `<article class="job-card-pro" aria-labelledby="job-${escapeHtml(j.requisition_id)}">
+                      <div class="job-card-pro__meta">
+                        <span class="badge badge--info">${escapeHtml(j.role_family)}</span>
+                        <span class="badge badge--live">${escapeHtml(j.employment_type)}</span>
+                        <span class="job-card-pro__req">Req #${escapeHtml(j.requisition_id)}</span>
+                      </div>
+                      <h3 id="job-${escapeHtml(j.requisition_id)}" class="job-card-pro__title">
+                        <a href="/careers/${escapeHtml(j.slug)}/">${escapeHtml(j.title)}</a>
+                      </h3>
+                      <div class="job-card-pro__details">
+                        <div class="job-card-pro__detail-row">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                            <circle cx="12" cy="10" r="3"></circle>
+                          </svg>
+                          <span><strong>Work Area:</strong> ${escapeHtml(j.work_area)}</span>
+                        </div>
+                        <div class="job-card-pro__detail-row">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polyline points="12 6 12 12 16 14"></polyline>
+                          </svg>
+                          <span><strong>Schedule:</strong> ${escapeHtml(j.schedule_text)}</span>
+                        </div>
+                        ${j.pay_info ? `<div class="job-card-pro__detail-row">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <line x1="12" y1="1" x2="12" y2="23"></line>
+                            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                          </svg>
+                          <span><strong>Pay:</strong> ${escapeHtml(j.pay_info)}</span>
+                        </div>` : ''}
+                      </div>
+                      <div class="job-card-pro__actions">
+                        <a href="/careers/${escapeHtml(j.slug)}/" class="btn btn--secondary btn--compact">View Details</a>
+                        <a href="/careers/${escapeHtml(j.slug)}/apply/" class="btn btn--primary btn--compact">Apply Now &rarr;</a>
+                      </div>
+                    </article>`
+                  )
+                  .join('')}
+              </div>`
+        }
+      </section>
+
+      <!-- How to Apply & Hiring Process Anchor Section -->
+      <section id="apply" class="careers-process-section" aria-labelledby="process-heading">
+        <div class="section-header" style="max-width:54rem;">
+          <span class="eyebrow">Candidate Journey</span>
+          <h2 id="process-heading">Our 3-step application and hiring process</h2>
+          <p class="section-header__lead">We keep our application direct, straightforward, and respectful of your time. Here is what to expect after applying.</p>
+        </div>
+
+        <div class="careers-process-grid">
+          <div class="careers-process-step">
+            <div class="careers-process-num" aria-hidden="true">1</div>
+            <h3>Submit Application Online</h3>
+            <p>Complete our mobile-friendly online form in 3–5 minutes. Enter your contact details and summarize prior maintenance, porter, or facility experience. Resumes are optional for porter roles.</p>
+          </div>
+
+          <div class="careers-process-step">
+            <div class="careers-process-num" aria-hidden="true">2</div>
+            <h3>Direct Review &amp; Phone Screen</h3>
+            <p>Our hiring manager reviews your application directly (no automated resume AI screeners). If your background matches the route or property requirements, we reach out for a 10-minute phone conversation.</p>
+          </div>
+
+          <div class="careers-process-step">
+            <div class="careers-process-num" aria-hidden="true">3</div>
+            <h3>In-Person Interview &amp; Offer</h3>
+            <p>Meet our operations lead at our Tempe base to review routes, duties, equipment, and compensation. Successful candidates receive written W2 offers with defined start dates and site orientations.</p>
+          </div>
+        </div>
+
+        <div class="careers-assistance-strip">
+          <div>
+            <strong>Need assistance or have questions before applying?</strong>
+            <p>Contact recruiting directly during business hours (Mon–Fri, 7 AM–5 PM) at <a href="tel:${escapeHtml(settings.phone_e164)}">${escapeHtml(settings.phone_display)}</a> or email <a href="mailto:${escapeHtml(settings.recruiting_contact)}">${escapeHtml(settings.recruiting_contact)}</a>.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Careers FAQ -->
+      <div style="margin-top:3.5rem;margin-bottom:2rem;">
+        <div class="section-header" style="margin-bottom:1.5rem;">
+          <span class="eyebrow">Common Questions</span>
+          <h2>Frequently asked questions about working with us</h2>
+        </div>
+        ${renderFaqAccordion(careersFaqs)}
+      </div>
+
     </div>
   </section>`;
 }

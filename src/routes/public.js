@@ -345,6 +345,7 @@ export async function handlePublicRoute(req, res, db, urlObj, nonce, storagePath
       }
 
       if (page.template === 'property_overview' || page.template === 'property' || page.template === 'buyer_solution') {
+        const isOverview = page.slug === '/properties/' || page.template === 'property_overview';
         const html = renderPageShell({
           title: rev.meta_title,
           metaDescription: rev.meta_description,
@@ -353,10 +354,12 @@ export async function handlePublicRoute(req, res, db, urlObj, nonce, storagePath
             buildJsonLdBreadcrumbs([
               { label: 'Home', href: '/' },
               { label: 'Properties we serve', href: '/properties/' },
-              ...(page.slug === '/properties/' ? [] : [{ label: rev.title, href: page.slug }]),
+              ...(isOverview ? [] : [{ label: rev.title, href: page.slug }]),
             ]),
           ],
-          bodyHtml: Pages.renderPropertyPage({ page, rev }),
+          bodyHtml: isOverview
+            ? Pages.renderPropertiesOverviewPage({ page, rev, settings })
+            : Pages.renderPropertyPage({ page, rev }),
         });
         sendHtml(res, 200, html);
         return true;
